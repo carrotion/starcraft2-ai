@@ -1,4 +1,5 @@
-# StarCraft AI: Coached Terran Bot & Multi-Process Reinforcement Suite
+# StarCraft 2 AI (`starcraft2-ai`)
+### Coached Terran Bot & Multi-Process Autonomous Learning Suite
 
 스타크래프트 II(StarCraft II) 및 스타크래프트 I(Brood War)을 위한 하이브리드 코치형 AI 에이전트 및 강화학습·대시보드 모니터링 시스템입니다.
 
