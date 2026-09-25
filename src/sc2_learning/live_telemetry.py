@@ -51,6 +51,10 @@ class LiveTelemetry:
         friendly_units: List[Dict[str, Any]],
         enemy_units: List[Dict[str, Any]],
         defense_anchor: tuple[float, float] | None = None,
+        thors_count: int = 0,
+        hellbats_count: int = 0,
+        vikings_count: int = 0,
+        bcs_count: int = 0,
     ):
         """Dumps structured live game observation to disk for websocket streaming."""
         now = time.time()
@@ -80,6 +84,10 @@ class LiveTelemetry:
                 "tanks_sieged": tanks_sieged,
                 "tanks_total": tanks_mobile + tanks_sieged,
                 "medivacs": medivacs_count,
+                "thors": thors_count,
+                "hellbats": hellbats_count,
+                "vikings": vikings_count,
+                "battlecruisers": bcs_count,
                 "bunkers": bunkers_count,
                 "turrets": turrets_count,
                 "bases": cc_count,

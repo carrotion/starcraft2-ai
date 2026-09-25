@@ -152,6 +152,8 @@ class TrackedBot(CoachedTerranBot):
         else:
             self.final_result = str(game_result)
 
+        await super().on_end(game_result)
+
 
 def run_worker_game(
     game_num: int,
@@ -321,7 +323,7 @@ def main():
                     map_name=played_map,
                 )
 
-                current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time)
+                current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time, enemy_race=actual_enemy)
 
                 print("=" * 75)
                 print(f"  🏁 [경기 #{g_num} 종료] (상대: {actual_enemy.upper()}, 맵: {played_map})")
@@ -387,7 +389,7 @@ def main():
                         )
 
                         # Auto-evolve strategy
-                        current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time)
+                        current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time, enemy_race=actual_enemy)
 
                         print("=" * 75)
                         print(f"  🏁 [워커 #{w_id}] 경기 #{g_num} 완료! [ {result_str.upper()} ] (상대: {actual_enemy.upper()}, 맵: {played_map})")

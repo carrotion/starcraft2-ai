@@ -95,26 +95,79 @@ class AutonomousEvaluator:
             "recent_10_win_rate": recent_win_rate,
         }
 
-    def evolve_strategy(self, current_strategy: StrategyConfig, last_result: str, game_duration: float) -> StrategyConfig:
-        """Autonomously adapts parameters to overcome observed challenges."""
+    def evolve_strategy(
+        self,
+        current_strategy: StrategyConfig,
+        last_result: str,
+        game_duration: float,
+        enemy_race: str = "Unknown",
+    ) -> StrategyConfig:
+        """Autonomously adapts parameters and unit compositions to overcome observed race & timing challenges."""
+        import random
         evolved = StrategyConfig(**asdict(current_strategy))
+        norm_race = enemy_race.upper()
 
-        # Adaptation rules
+        # 1. Defeat Analysis & Counter-Composition Adaptation
         if last_result == "Defeat":
-            if game_duration < 300:  # Early game loss (< 5 mins) -> Prioritize earlier defense
+            if game_duration < 300:  # Early game loss (< 5 mins) -> Prioritize early bunker defense & bio
                 evolved.target_barracks = max(4, evolved.target_barracks)
                 evolved.mule_energy_threshold = 100
+                evolved.train_marines = True
                 evolved.attack_army_threshold = max(24, evolved.attack_army_threshold - 2)
-            else:  # Mid/Late game loss (> 5 mins) -> Build a larger deathball & expand economy
+            elif game_duration < 600:  # Mid game loss (5~10 mins) -> Race-specific unit counters
                 evolved.attack_army_threshold = min(36, evolved.attack_army_threshold + 2)
                 evolved.target_factories = min(3, evolved.target_factories + 1)
-                evolved.max_bases = min(4, max(2, evolved.max_bases + 1))
-                evolved.max_workers = min(75, max(48, evolved.max_workers + 6))
+                evolved.build_armory = True
+
+                if "ZERG" in norm_race:
+                    # Counter Zerglings/Banelings with Hellbats, Mutas/Ultras with Thors
+                    evolved.train_hellbats = True
+                    evolved.train_thors = True
+                    evolved.train_siege_tanks = True
+                elif "PROTOSS" in norm_race:
+                    # Counter Stalkers with Marauders, Colossi/Carriers with Vikings & Thors
+                    evolved.train_marauders = True
+                    evolved.train_vikings = True
+                    evolved.train_thors = True
+                elif "TERRAN" in norm_race:
+                    # Counter Siege Tanks and gain air superiority
+                    evolved.train_siege_tanks = True
+                    evolved.train_vikings = True
+            else:  # Late game loss (> 10 mins) -> Macro expansion & Ultimate Tech (Battlecruisers & Thors)
+                evolved.max_bases = min(4, max(3, evolved.max_bases + 1))
+                evolved.max_workers = min(75, max(55, evolved.max_workers + 6))
+                evolved.target_factories = 3
+                evolved.target_starports = 2
+                evolved.build_armory = True
+                evolved.build_fusion_core = True
+                evolved.train_thors = True
+                evolved.train_battlecruisers = True
+                evolved.attack_army_threshold = min(40, evolved.attack_army_threshold + 4)
+
+        # 2. Victory Reinforcement & Exploration
         elif last_result == "Victory":
-            # On victory, reinforce winning configuration or slightly explore aggressive timings
             if game_duration > 600:
-                evolved.attack_army_threshold = min(32, evolved.attack_army_threshold + 1)
+                evolved.attack_army_threshold = min(34, evolved.attack_army_threshold + 1)
                 evolved.max_bases = max(3, min(4, evolved.max_bases))
                 evolved.max_workers = max(60, min(75, evolved.max_workers))
+                # If victory in long game, reinforce capital ships & thors
+                evolved.build_armory = True
+                evolved.build_fusion_core = True
+                evolved.train_thors = True
+                evolved.train_battlecruisers = True
+
+            # 15% chance to explore alternative composition flavor (Reinforcement Learning exploration)
+            if random.random() < 0.15:
+                archetype = random.choice(["adaptive", "mech_heavy", "sky_terran"])
+                evolved.composition_focus = archetype
+                if archetype == "mech_heavy":
+                    evolved.target_factories = 3
+                    evolved.train_thors = True
+                    evolved.train_hellbats = True
+                elif archetype == "sky_terran":
+                    evolved.target_starports = 2
+                    evolved.build_fusion_core = True
+                    evolved.train_vikings = True
+                    evolved.train_battlecruisers = True
 
         return evolved

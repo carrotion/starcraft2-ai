@@ -267,7 +267,7 @@
           </div>
         </div>
 
-        <!-- Army Units Grid -->
+        <!-- Army Units Grid (8종 복합 유닛 실시간 현황) -->
         <div class="grid grid-cols-4 gap-2 text-xs">
           <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
             <span class="text-slate-400 text-[10px]">해병</span>
@@ -284,6 +284,22 @@
           <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
             <span class="text-slate-400 text-[10px]">의료선</span>
             <div id="hudMedivacs" class="font-bold text-cyan-400 text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">토르</span>
+            <div id="hudThors" class="font-bold text-amber-500 text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">바이킹</span>
+            <div id="hudVikings" class="font-bold text-sky-400 text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">화기병</span>
+            <div id="hudHellbats" class="font-bold text-orange-400 text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">배틀</span>
+            <div id="hudBCs" class="font-bold text-purple-400 text-base">0</div>
           </div>
         </div>
 
@@ -607,7 +623,19 @@
         telemetry.radar.friendly.forEach(u => {
           const ux = u.x * scaleX;
           const uy = h - (u.y * scaleY);
-          if (u.t.includes('SIEGETANK')) {
+          if (u.t.includes('BATTLECRUISER')) {
+            ctx.fillStyle = '#c084fc';
+            ctx.beginPath(); ctx.arc(ux, uy, 6, 0, Math.PI * 2); ctx.fill();
+          } else if (u.t.includes('THOR')) {
+            ctx.fillStyle = '#f59e0b';
+            ctx.fillRect(ux - 4, uy - 4, 8, 8);
+          } else if (u.t.includes('VIKING')) {
+            ctx.fillStyle = '#38bdf8';
+            ctx.beginPath(); ctx.arc(ux, uy, 4, 0, Math.PI * 2); ctx.fill();
+          } else if (u.t.includes('HELLION')) {
+            ctx.fillStyle = '#fb923c';
+            ctx.beginPath(); ctx.arc(ux, uy, 3, 0, Math.PI * 2); ctx.fill();
+          } else if (u.t.includes('SIEGETANK')) {
             ctx.fillStyle = '#facc15';
             ctx.fillRect(ux - 3, uy - 3, 6, 6);
           } else if (u.t.includes('MEDIVAC')) {
@@ -727,10 +755,14 @@
           document.getElementById('liveVespene').innerText = telemetry.resources.vespene;
           document.getElementById('liveSupply').innerText = `${telemetry.resources.supply_used} / ${telemetry.resources.supply_cap}`;
 
-          document.getElementById('hudMarines').innerText = telemetry.army.marines;
-          document.getElementById('hudMarauders').innerText = telemetry.army.marauders;
-          document.getElementById('hudTanks').innerText = `${telemetry.army.tanks_total} (${telemetry.army.tanks_sieged})`;
-          document.getElementById('hudMedivacs').innerText = telemetry.army.medivacs;
+          document.getElementById('hudMarines').innerText = telemetry.army.marines || 0;
+          document.getElementById('hudMarauders').innerText = telemetry.army.marauders || 0;
+          document.getElementById('hudTanks').innerText = `${telemetry.army.tanks_total || 0} (${telemetry.army.tanks_sieged || 0})`;
+          document.getElementById('hudMedivacs').innerText = telemetry.army.medivacs || 0;
+          if (document.getElementById('hudThors')) document.getElementById('hudThors').innerText = telemetry.army.thors || 0;
+          if (document.getElementById('hudVikings')) document.getElementById('hudVikings').innerText = telemetry.army.vikings || 0;
+          if (document.getElementById('hudHellbats')) document.getElementById('hudHellbats').innerText = telemetry.army.hellbats || 0;
+          if (document.getElementById('hudBCs')) document.getElementById('hudBCs').innerText = telemetry.army.battlecruisers || 0;
           document.getElementById('hudStatusText').innerText = telemetry.status || '전투 대기 중';
 
           // Caster logs

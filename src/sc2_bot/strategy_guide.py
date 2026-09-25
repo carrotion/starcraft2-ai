@@ -35,19 +35,38 @@ class StrategyConfig:
     build_starport: bool = True  # 우주공항
     target_starports: int = 1
 
-    # [4단계: 업그레이드 연구]
+    # [4단계: 테크 인프라 및 업그레이드 연구]
     build_engineering_bay: bool = True  # 공학연구소
+    build_armory: bool = True  # 무기고 (토르 필수 & 차량/함선/보병 고티어 업그레이드 해금)
+    build_fusion_core: bool = True  # 융합로 (우주공항 후반 전투순양함 필수)
+    build_ghost_academy: bool = True  # 유령사관학교 (유령 해금 및 핵/EMP 지원)
     research_stimpack: bool = True  # 스팀팩
     research_combat_shield: bool = True  # 전투 방패
     research_concussive_shells: bool = True  # 불곰 충격탄 (적 돌진 감속)
-    research_weapons: bool = True  # 보병 공1업
-    research_armor: bool = True  # 보병 방1업
+    research_weapons: bool = True  # 보병 공1~3업
+    research_armor: bool = True  # 보병 방1~3업
+    research_mech_weapons: bool = True  # 차량 및 함선 공격 1~3업
+    research_mech_armor: bool = True  # 차량 및 함선 장갑 1~3업
+    research_special_abilities: bool = True  # 야마토포, 밴시/유령 은폐, 해방선 사거리, 지뢰 천공발톱 등 특수기술
 
-    # [5단계: 복합 유닛 생산]
-    train_marines: bool = True
-    train_marauders: bool = True
-    train_siege_tanks: bool = True
-    train_medivacs: bool = True
+    # [5단계: 자율 복합 유닛 생산 - 강화학습/전황에 따른 지능형 조합 16종 전면 해금]
+    composition_focus: str = "adaptive"  # adaptive(자율 적응 강화학습 가중치 제어)
+    train_marines: bool = True           # 해병
+    train_reapers: bool = True           # 사신
+    train_marauders: bool = True         # 불곰
+    train_ghosts: bool = True            # 유령
+    train_hellions: bool = True          # 화염차
+    train_hellbats: bool = True          # 화염기갑병
+    train_widow_mines: bool = True       # 땅거미 지뢰
+    train_cyclones: bool = True          # 사이클론
+    train_siege_tanks: bool = True       # 공성전차
+    train_thors: bool = True             # 토르
+    train_vikings: bool = True           # 바이킹
+    train_medivacs: bool = True          # 의료선
+    train_liberators: bool = True        # 해방선
+    train_ravens: bool = True            # 밤까마귀
+    train_banshees: bool = True          # 밴시
+    train_battlecruisers: bool = True    # 전투순양함
 
     # [6단계: 교전 및 전술]
     attack_army_threshold: int = 28  # 탄탄한 화력(전차 4+, 바이오닉 20+) 구축 후 진격

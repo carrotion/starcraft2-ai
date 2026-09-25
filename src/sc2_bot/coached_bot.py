@@ -4,6 +4,7 @@ import time
 import traceback
 from typing import Optional, List
 from sc2.bot_ai import BotAI
+from sc2.data import Race, Result
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.ids.ability_id import AbilityId
 from sc2.ids.upgrade_id import UpgradeId
@@ -12,6 +13,7 @@ from sc2.position import Point2
 from src.sc2_bot.strategy_guide import StrategyConfig, CURRENT_STRATEGY
 from src.sc2_bot.micro_controller import TerranMicroController
 from src.sc2_learning.live_telemetry import LiveTelemetry
+from src.sc2_learning.unit_optimizer import UnitOptimizer, ALL_16_UNITS
 
 
 class CoachedTerranBot(BotAI):
@@ -23,6 +25,9 @@ class CoachedTerranBot(BotAI):
         self.worker_id = worker_id
         self.micro = TerranMicroController(self)
         self.telemetry = LiveTelemetry(worker_id)
+        self.unit_optimizer = UnitOptimizer()
+        self.units_produced_tracker = {u: 0 for u in ALL_16_UNITS}
+        self.actual_enemy_race = "DEFAULT"
         self.last_log_time = 0.0
         self.prev_status = ""
 
@@ -187,6 +192,22 @@ class CoachedTerranBot(BotAI):
             print(f"\n[안전 시스템] Step {iteration} 경고: {e} (게임 지속 실행 중)")
 
     async def _step_body(self, iteration: int):
+        # 0. Enemy Race auto-detection
+        if self.actual_enemy_race in ("DEFAULT", "Unknown", "Random", "random"):
+            if self.enemy_race and self.enemy_race != Race.Random:
+                self.actual_enemy_race = self.enemy_race.name
+            elif hasattr(self, "game_info") and self.game_info.players:
+                opponents = [p for p in self.game_info.players if p.id != self.player_id]
+                if opponents:
+                    valid_races = [p.actual_race.name for p in opponents if p.actual_race and p.actual_race != Race.Random]
+                    if valid_races:
+                        self.actual_enemy_race = "+".join(valid_races)
+            if self.actual_enemy_race in ("DEFAULT", "Unknown", "Random", "random"):
+                if self.all_enemy_units:
+                    self.actual_enemy_race = self.all_enemy_units.first.race.name
+                elif self.enemy_structures:
+                    self.actual_enemy_race = self.enemy_structures.first.race.name
+
         # 1. Base check
         cc_list = self.townhalls
         if not cc_list:
@@ -500,12 +521,39 @@ class CoachedTerranBot(BotAI):
                         self.do(worker.build(UnitTypeId.ENGINEERINGBAY, pos), subtract_cost=True, ignore_warning=True)
 
 
-            # Infantry Upgrades
+            # Infantry Upgrades (공1~3업, 방1~3업, 건물방어)
+            armory_ready = self.structures(UnitTypeId.ARMORY).ready
             for ebay in self.structures(UnitTypeId.ENGINEERINGBAY).ready.idle:
-                if self.strategy.research_weapons and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1):
-                    ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1)
-                elif self.strategy.research_armor and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL1):
-                    ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL1)
+                # Weapons: 1 -> 2 -> 3
+                if self.strategy.research_weapons:
+                    if self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1):
+                        ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1)
+                        continue
+                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2):
+                        ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2)
+                        continue
+                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3):
+                        ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3)
+                        continue
+
+                # Armors: 1 -> 2 -> 3
+                if self.strategy.research_armor:
+                    if self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL1):
+                        ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL1)
+                        continue
+                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL2):
+                        ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL2)
+                        continue
+                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL3):
+                        ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL3)
+                        continue
+
+                # Building armor & sensor range
+                if self.minerals > 400 and self.vespene > 200:
+                    if self.already_pending_upgrade(UpgradeId.TERRANBUILDINGARMOR) == 0 and self.can_afford(UpgradeId.TERRANBUILDINGARMOR):
+                        ebay.research(UpgradeId.TERRANBUILDINGARMOR)
+                    elif self.already_pending_upgrade(UpgradeId.HISECAUTOTRACKING) == 0 and self.can_afford(UpgradeId.HISECAUTOTRACKING):
+                        ebay.research(UpgradeId.HISECAUTOTRACKING)
 
             # Missile Turrets for Air & Cloaked unit defense
             if self.strategy.build_missile_turrets and self.structures(UnitTypeId.ENGINEERINGBAY).ready:
@@ -526,14 +574,143 @@ class CoachedTerranBot(BotAI):
 
         # 13. Barracks Tech Lab Research: Stimpack -> Combat Shield -> Concussive Shells
         for lab in self.structures(UnitTypeId.BARRACKSTECHLAB).ready.idle:
-            if self.strategy.research_stimpack and self.can_afford(UpgradeId.STIMPACK):
+            if self.strategy.research_stimpack and self.already_pending_upgrade(UpgradeId.STIMPACK) == 0 and self.can_afford(UpgradeId.STIMPACK):
                 lab.research(UpgradeId.STIMPACK)
-            elif self.strategy.research_combat_shield and self.can_afford(UpgradeId.SHIELDWALL):
+            elif self.strategy.research_combat_shield and self.already_pending_upgrade(UpgradeId.SHIELDWALL) == 0 and self.can_afford(UpgradeId.SHIELDWALL):
                 lab.research(UpgradeId.SHIELDWALL)
-            elif self.strategy.research_concussive_shells and self.can_afford(UpgradeId.PUNISHERGRENADES):
+            elif self.strategy.research_concussive_shells and self.already_pending_upgrade(UpgradeId.PUNISHERGRENADES) == 0 and self.can_afford(UpgradeId.PUNISHERGRENADES):
                 lab.research(UpgradeId.PUNISHERGRENADES)
 
-        # 14. Unit Production
+        # 13-B. Armory (무기고) 건설 및 차량/함선 공방 1~3업 연구
+        if self.strategy.build_armory and self.structures(UnitTypeId.FACTORY).ready:
+            armory_count = self.structures(UnitTypeId.ARMORY).amount + self.already_pending(UnitTypeId.ARMORY)
+            if armory_count < (2 if total_cc >= 3 and self.minerals > 600 else 1) and self.can_afford(UnitTypeId.ARMORY):
+                pos = await self.find_safe_main_placement(UnitTypeId.ARMORY, addon_place=False)
+                if pos:
+                    worker = self.select_build_worker(pos)
+                    if worker:
+                        self.do(worker.build(UnitTypeId.ARMORY, pos), subtract_cost=True, ignore_warning=True)
+
+            for armory in self.structures(UnitTypeId.ARMORY).ready.idle:
+                # 1. Vehicle Weapons (공성전차, 토르, 화염차, 화염기갑병, 사이클론)
+                if self.strategy.research_mech_weapons:
+                    if self.already_pending_upgrade(UpgradeId.TERRANVEHICLEWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEWEAPONSLEVEL1):
+                        armory.research(UpgradeId.TERRANVEHICLEWEAPONSLEVEL1)
+                        continue
+                    elif self.already_pending_upgrade(UpgradeId.TERRANVEHICLEWEAPONSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEWEAPONSLEVEL2):
+                        armory.research(UpgradeId.TERRANVEHICLEWEAPONSLEVEL2)
+                        continue
+                    elif self.already_pending_upgrade(UpgradeId.TERRANVEHICLEWEAPONSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEWEAPONSLEVEL3):
+                        armory.research(UpgradeId.TERRANVEHICLEWEAPONSLEVEL3)
+                        continue
+
+                # 2. Vehicle & Ship Plating / Armor (지상 및 공중 공통 장갑)
+                if self.strategy.research_mech_armor:
+                    if self.already_pending_upgrade(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL1):
+                        armory.research(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL1)
+                        continue
+                    elif self.already_pending_upgrade(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL2):
+                        armory.research(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL2)
+                        continue
+                    elif self.already_pending_upgrade(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL3):
+                        armory.research(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL3)
+                        continue
+
+                # 3. Ship Weapons (전투순양함, 바이킹, 해방선, 밴시)
+                if self.strategy.research_mech_weapons:
+                    if self.already_pending_upgrade(UpgradeId.TERRANSHIPWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANSHIPWEAPONSLEVEL1):
+                        armory.research(UpgradeId.TERRANSHIPWEAPONSLEVEL1)
+                        continue
+                    elif self.already_pending_upgrade(UpgradeId.TERRANSHIPWEAPONSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANSHIPWEAPONSLEVEL2):
+                        armory.research(UpgradeId.TERRANSHIPWEAPONSLEVEL2)
+                        continue
+                    elif self.already_pending_upgrade(UpgradeId.TERRANSHIPWEAPONSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANSHIPWEAPONSLEVEL3):
+                        armory.research(UpgradeId.TERRANSHIPWEAPONSLEVEL3)
+                        continue
+
+        # 13-C. Fusion Core (융합로) 건설 및 야마토포 / 해방선 고급 탄도학 연구
+        if self.strategy.build_fusion_core and self.structures(UnitTypeId.STARPORT).ready and total_cc >= 2:
+            fusion_count = self.structures(UnitTypeId.FUSIONCORE).amount + self.already_pending(UnitTypeId.FUSIONCORE)
+            if fusion_count < 1 and self.can_afford(UnitTypeId.FUSIONCORE) and (self.time > 380 or self.minerals > 550):
+                pos = await self.find_safe_main_placement(UnitTypeId.FUSIONCORE, addon_place=False)
+                if pos:
+                    worker = self.select_build_worker(pos)
+                    if worker:
+                        self.do(worker.build(UnitTypeId.FUSIONCORE, pos), subtract_cost=True, ignore_warning=True)
+
+        for fc in self.structures(UnitTypeId.FUSIONCORE).ready.idle:
+            if self.strategy.research_special_abilities:
+                if self.already_pending_upgrade(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS) == 0 and self.can_afford(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS):
+                    fc.research(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS)
+                elif self.already_pending_upgrade(UpgradeId.LIBERATORAGRANGEUPGRADE) == 0 and self.can_afford(UpgradeId.LIBERATORAGRANGEUPGRADE):
+                    fc.research(UpgradeId.LIBERATORAGRANGEUPGRADE)
+
+        # 13-D. Ghost Academy (유령사관학교) 건설 및 개인 은폐 연구
+        effective_weights = self.unit_optimizer.get_effective_weights(
+            enemy_race=self.actual_enemy_race,
+            enemy_units=self.enemy_units,
+            game_time=self.time,
+            minerals=self.minerals,
+            vespene=self.vespene,
+        )
+        ghost_w = effective_weights.get("ghost", 0.5)
+        if (
+            self.strategy.build_ghost_academy
+            and self.structures(UnitTypeId.BARRACKS).ready
+            and total_cc >= 2
+            and (ghost_w >= 0.6 or self.minerals > 500)
+        ):
+            academy_count = (
+                self.structures(UnitTypeId.GHOSTACADEMY).amount
+                + self.already_pending(UnitTypeId.GHOSTACADEMY)
+            )
+            if academy_count < 1 and self.can_afford(UnitTypeId.GHOSTACADEMY):
+                pos = await self.find_safe_main_placement(UnitTypeId.GHOSTACADEMY, addon_place=False)
+                if pos:
+                    worker = self.select_build_worker(pos)
+                    if worker:
+                        self.do(worker.build(UnitTypeId.GHOSTACADEMY, pos), subtract_cost=True, ignore_warning=True)
+
+        for academy in self.structures(UnitTypeId.GHOSTACADEMY).ready.idle:
+            if self.strategy.research_special_abilities:
+                if self.already_pending_upgrade(UpgradeId.PERSONALCLOAKING) == 0 and self.can_afford(UpgradeId.PERSONALCLOAKING):
+                    academy.research(UpgradeId.PERSONALCLOAKING)
+
+        # 13-E. Factory Tech Lab Research (사이클론 가속기, 지뢰 천공발톱, 지옥불 조기점화기)
+        if self.strategy.research_special_abilities:
+            for flab in self.structures(UnitTypeId.FACTORYTECHLAB).ready.idle:
+                if self.already_pending_upgrade(UpgradeId.HIGHCAPACITYBARRELS) == 0 and self.can_afford(UpgradeId.HIGHCAPACITYBARRELS):
+                    flab.research(UpgradeId.HIGHCAPACITYBARRELS)
+                elif self.already_pending_upgrade(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE) == 0 and self.can_afford(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE):
+                    flab.research(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE)
+                elif self.already_pending_upgrade(UpgradeId.DRILLCLAWS) == 0 and self.can_afford(UpgradeId.DRILLCLAWS):
+                    flab.research(UpgradeId.DRILLCLAWS)
+                elif self.already_pending_upgrade(UpgradeId.SMARTSERVOS) == 0 and self.can_afford(UpgradeId.SMARTSERVOS):
+                    flab.research(UpgradeId.SMARTSERVOS)
+
+        # 13-F. Starport Tech Lab Construction & Research (기술실 및 밴시 은폐/가속 연구)
+        for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
+            if not starport.has_add_on and self.can_afford(UnitTypeId.STARPORTTECHLAB):
+                addon_slot = starport.position.offset((2.5, -0.5))
+                if await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_slot):
+                    starport.build(UnitTypeId.STARPORTTECHLAB)
+                    break
+
+        if self.strategy.research_special_abilities:
+            for slab in self.structures(UnitTypeId.STARPORTTECHLAB).ready.idle:
+                if self.already_pending_upgrade(UpgradeId.BANSHEECLOAK) == 0 and self.can_afford(UpgradeId.BANSHEECLOAK):
+                    slab.research(UpgradeId.BANSHEECLOAK)
+                elif self.already_pending_upgrade(UpgradeId.BANSHEESPEED) == 0 and self.can_afford(UpgradeId.BANSHEESPEED):
+                    slab.research(UpgradeId.BANSHEESPEED)
+
+        # 14. Unit Production (자율 16종 전 유닛 복합 생산 체제)
+        # 14-A. Barracks Production (해병, 사신, 불곰, 유령)
+        marine_count = self.units(UnitTypeId.MARINE).amount + self.already_pending(UnitTypeId.MARINE)
+        reaper_count = self.units(UnitTypeId.REAPER).amount + self.already_pending(UnitTypeId.REAPER)
+        marauder_count = self.units(UnitTypeId.MARAUDER).amount + self.already_pending(UnitTypeId.MARAUDER)
+        ghost_count = self.units(UnitTypeId.GHOST).amount + self.already_pending(UnitTypeId.GHOST)
+        ghost_academy_ready = self.structures(UnitTypeId.GHOSTACADEMY).ready
+
         for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
             if self.supply_left < 1:
                 break
@@ -544,40 +721,176 @@ class CoachedTerranBot(BotAI):
                 if addon:
                     addon_type = addon.type_id
 
-            if addon_type == UnitTypeId.BARRACKSTECHLAB:
-                if self.strategy.train_marauders and self.can_afford(UnitTypeId.MARAUDER) and self.vespene >= 25:
-                    rax.train(UnitTypeId.MARAUDER)
-                elif self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE):
-                    rax.train(UnitTypeId.MARINE)
+            has_techlab = (addon_type == UnitTypeId.BARRACKSTECHLAB)
+            candidates = []
+
+            if has_techlab:
+                if self.strategy.train_ghosts and ghost_academy_ready and ghost_count < (5 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.GHOST) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("ghost", 0.5), UnitTypeId.GHOST, "ghost"))
+                if self.strategy.train_marauders and self.can_afford(UnitTypeId.MARAUDER) and self.vespene >= 25 and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("marauder", 1.0), UnitTypeId.MARAUDER, "marauder"))
+                if self.strategy.train_reapers and reaper_count < (2 if total_cc >= 3 else 1) and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
+                    candidates.append((effective_weights.get("reaper", 0.3), UnitTypeId.REAPER, "reaper"))
+                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
+                    candidates.append((effective_weights.get("marine", 1.2), UnitTypeId.MARINE, "marine"))
             else:
-                # Reactor or Plain: Train Marines
-                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE):
-                    rax.train(UnitTypeId.MARINE)
+                if self.strategy.train_reapers and reaper_count < (2 if total_cc >= 3 else 1) and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
+                    candidates.append((effective_weights.get("reaper", 0.3), UnitTypeId.REAPER, "reaper"))
+                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
+                    candidates.append((effective_weights.get("marine", 1.2), UnitTypeId.MARINE, "marine"))
 
-        # Tanks
-        if self.strategy.train_siege_tanks:
-            for factory in self.structures(UnitTypeId.FACTORY).ready.idle:
-                if factory.has_add_on and self.can_afford(UnitTypeId.SIEGETANK) and self.supply_left >= 3:
-                    factory.train(UnitTypeId.SIEGETANK)
+            if candidates:
+                candidates.sort(key=lambda c: c[0], reverse=True)
+                _, best_type, best_name = candidates[0]
+                rax.train(best_type)
+                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
+                if best_name == "ghost": ghost_count += 1
+                elif best_name == "marauder": marauder_count += 1
+                elif best_name == "reaper": reaper_count += 1
+                elif best_name == "marine": marine_count += 1
 
-        # Medivacs
-        if self.strategy.train_medivacs:
-            medivac_count = self.units(UnitTypeId.MEDIVAC).amount + self.already_pending(UnitTypeId.MEDIVAC)
-            if medivac_count < 4:
-                for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
-                    if self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
-                        starport.train(UnitTypeId.MEDIVAC)
+        # 14-B. Factory Production (공성전차, 토르, 화염차, 화염기갑병, 사이클론, 땅거미 지뢰)
+        armory_ready = self.structures(UnitTypeId.ARMORY).ready
+        thor_count = self.units(UnitTypeId.THOR).amount + self.units(UnitTypeId.THORAP).amount + self.already_pending(UnitTypeId.THOR)
+        tank_count = self.units(UnitTypeId.SIEGETANK).amount + self.units(UnitTypeId.SIEGETANKSIEGED).amount + self.already_pending(UnitTypeId.SIEGETANK)
+        cyclone_count = self.units(UnitTypeId.CYCLONE).amount + self.already_pending(UnitTypeId.CYCLONE)
+        mine_count = self.units(UnitTypeId.WIDOWMINE).amount + self.units(UnitTypeId.WIDOWMINEBURROWED).amount + self.already_pending(UnitTypeId.WIDOWMINE)
+        hellbat_count = self.units(UnitTypeId.HELLIONTANK).amount + self.already_pending(UnitTypeId.HELLIONTANK)
+        hellion_count = self.units(UnitTypeId.HELLION).amount + self.already_pending(UnitTypeId.HELLION)
 
-        # 15. Combat, Defense Anchoring & Micro-Control
+        for factory in self.structures(UnitTypeId.FACTORY).ready.idle:
+            if self.supply_left < 2:
+                break
+
+            addon_type = None
+            if factory.add_on_tag:
+                addon = self.structures.find_by_tag(factory.add_on_tag)
+                if addon:
+                    addon_type = addon.type_id
+
+            has_techlab = (addon_type == UnitTypeId.FACTORYTECHLAB)
+            candidates = []
+
+            if has_techlab:
+                if self.strategy.train_thors and armory_ready and thor_count < (4 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.THOR) and self.supply_left >= 6:
+                    candidates.append((effective_weights.get("thor", 0.8), UnitTypeId.THOR, "thor"))
+                if self.strategy.train_siege_tanks and tank_count < (8 if total_cc >= 3 else 4) and self.can_afford(UnitTypeId.SIEGETANK) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("siegetank", 1.3), UnitTypeId.SIEGETANK, "siegetank"))
+                if self.strategy.train_cyclones and cyclone_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("cyclone", 0.7), UnitTypeId.CYCLONE, "cyclone"))
+                if self.strategy.train_widow_mines and mine_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("widowmine", 0.6), UnitTypeId.WIDOWMINE, "widowmine"))
+                if self.strategy.train_hellbats and armory_ready and hellbat_count < (8 if total_cc >= 3 else 4) and self.can_afford(UnitTypeId.HELLIONTANK) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("hellbat", 0.8), UnitTypeId.HELLIONTANK, "hellbat"))
+                if self.strategy.train_hellions and hellion_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.HELLION) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("hellion", 0.5), UnitTypeId.HELLION, "hellion"))
+            else:
+                if self.strategy.train_cyclones and cyclone_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("cyclone", 0.7), UnitTypeId.CYCLONE, "cyclone"))
+                if self.strategy.train_widow_mines and mine_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("widowmine", 0.6), UnitTypeId.WIDOWMINE, "widowmine"))
+                if self.strategy.train_hellbats and armory_ready and hellbat_count < (8 if total_cc >= 3 else 4) and self.can_afford(UnitTypeId.HELLIONTANK) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("hellbat", 0.8), UnitTypeId.HELLIONTANK, "hellbat"))
+                if self.strategy.train_hellions and hellion_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.HELLION) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("hellion", 0.5), UnitTypeId.HELLION, "hellion"))
+
+            if candidates:
+                candidates.sort(key=lambda c: c[0], reverse=True)
+                _, best_type, best_name = candidates[0]
+                factory.train(best_type)
+                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
+                if best_name == "thor": thor_count += 1
+                elif best_name == "siegetank": tank_count += 1
+                elif best_name == "cyclone": cyclone_count += 1
+                elif best_name == "widowmine": mine_count += 1
+                elif best_name == "hellbat": hellbat_count += 1
+                elif best_name == "hellion": hellion_count += 1
+
+        # 14-C. Starport Production (전투순양함, 밤까마귀, 밴시, 해방선, 바이킹, 의료선)
+        fusion_ready = self.structures(UnitTypeId.FUSIONCORE).ready
+        bc_count = self.units(UnitTypeId.BATTLECRUISER).amount + self.already_pending(UnitTypeId.BATTLECRUISER)
+        raven_count = self.units(UnitTypeId.RAVEN).amount + self.already_pending(UnitTypeId.RAVEN)
+        banshee_count = self.units(UnitTypeId.BANSHEE).amount + self.already_pending(UnitTypeId.BANSHEE)
+        medivac_count = self.units(UnitTypeId.MEDIVAC).amount + self.already_pending(UnitTypeId.MEDIVAC)
+        viking_count = self.units(UnitTypeId.VIKINGFIGHTER).amount + self.units(UnitTypeId.VIKINGASSAULT).amount + self.already_pending(UnitTypeId.VIKINGFIGHTER)
+        lib_count = self.units(UnitTypeId.LIBERATOR).amount + self.units(UnitTypeId.LIBERATORAG).amount + self.already_pending(UnitTypeId.LIBERATOR)
+
+        for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
+            if self.supply_left < 2:
+                break
+
+            addon_type = None
+            if starport.add_on_tag:
+                addon = self.structures.find_by_tag(starport.add_on_tag)
+                if addon:
+                    addon_type = addon.type_id
+
+            has_techlab = (addon_type == UnitTypeId.STARPORTTECHLAB)
+            candidates = []
+
+            if has_techlab:
+                if self.strategy.train_battlecruisers and fusion_ready and bc_count < (5 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.BATTLECRUISER) and self.supply_left >= 6:
+                    candidates.append((effective_weights.get("battlecruiser", 0.8), UnitTypeId.BATTLECRUISER, "battlecruiser"))
+                if self.strategy.train_ravens and raven_count < (3 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.RAVEN) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("raven", 0.6), UnitTypeId.RAVEN, "raven"))
+                if self.strategy.train_banshees and banshee_count < (4 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.BANSHEE) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("banshee", 0.5), UnitTypeId.BANSHEE, "banshee"))
+                if self.strategy.train_medivacs and medivac_count < 4 and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("medivac", 0.9), UnitTypeId.MEDIVAC, "medivac"))
+                if self.strategy.train_vikings and viking_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("viking", 1.0), UnitTypeId.VIKINGFIGHTER, "viking"))
+                if self.strategy.train_liberators and lib_count < 4 and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("liberator", 0.6), UnitTypeId.LIBERATOR, "liberator"))
+            else:
+                if self.strategy.train_medivacs and medivac_count < 4 and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("medivac", 0.9), UnitTypeId.MEDIVAC, "medivac"))
+                if self.strategy.train_vikings and viking_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
+                    candidates.append((effective_weights.get("viking", 1.0), UnitTypeId.VIKINGFIGHTER, "viking"))
+                if self.strategy.train_liberators and lib_count < 4 and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
+                    candidates.append((effective_weights.get("liberator", 0.6), UnitTypeId.LIBERATOR, "liberator"))
+
+            if candidates:
+                candidates.sort(key=lambda c: c[0], reverse=True)
+                _, best_type, best_name = candidates[0]
+                starport.train(best_type)
+                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
+                if best_name == "battlecruiser":
+                    bc_count += 1
+                    self.telemetry.log_event("함대 출격: 전투순양함(Battlecruiser) 건조 착수!", "battlecruiser")
+                elif best_name == "raven": raven_count += 1
+                elif best_name == "banshee": banshee_count += 1
+                elif best_name == "medivac": medivac_count += 1
+                elif best_name == "viking": viking_count += 1
+                elif best_name == "liberator": lib_count += 1
+
+        # 15. Combat, Defense Anchoring & Micro-Control (제병 협동 전술 - 16종 전 유닛 통합 관제)
         marines = self.units(UnitTypeId.MARINE)
         marauders = self.units(UnitTypeId.MARAUDER)
+        reapers = self.units(UnitTypeId.REAPER)
+        ghosts = self.units(UnitTypeId.GHOST)
         bio = marines | marauders
 
         mobile_tanks = self.units(UnitTypeId.SIEGETANK)
         sieged_tanks = self.units(UnitTypeId.SIEGETANKSIEGED)
         tanks = mobile_tanks | sieged_tanks
+        hellbats = self.units(UnitTypeId.HELLIONTANK)
+        hellions = self.units(UnitTypeId.HELLION)
+        widowmines = self.units(UnitTypeId.WIDOWMINE) | self.units(UnitTypeId.WIDOWMINEBURROWED)
+        cyclones = self.units(UnitTypeId.CYCLONE)
+        thors = self.units(UnitTypeId.THOR) | self.units(UnitTypeId.THORAP)
+
         medivacs = self.units(UnitTypeId.MEDIVAC)
-        total_combat_army = len(bio) + len(tanks) + len(medivacs)
+        vikings = self.units(UnitTypeId.VIKINGFIGHTER) | self.units(UnitTypeId.VIKINGASSAULT)
+        liberators = self.units(UnitTypeId.LIBERATOR) | self.units(UnitTypeId.LIBERATORAG)
+        ravens = self.units(UnitTypeId.RAVEN)
+        banshees = self.units(UnitTypeId.BANSHEE)
+        battlecruisers = self.units(UnitTypeId.BATTLECRUISER)
+
+        total_combat_army = (
+            len(bio) + len(reapers) + len(ghosts)
+            + len(tanks) + len(hellbats) + len(hellions) + len(widowmines) + len(cyclones) + len(thors)
+            + len(medivacs) + len(vikings) + len(liberators) + len(ravens) + len(banshees) + len(battlecruisers)
+        )
 
         # Determine Active Frontline Defense Anchor (앞마당 기지가 있으면 앞마당이 전선 집결지!)
         bunkers = self.structures(UnitTypeId.BUNKER).ready
@@ -607,22 +920,57 @@ class CoachedTerranBot(BotAI):
             enemies_near_base = enemies_near_base | enemy_units.closer_than(24, other_ccs.first)
 
         if self.strategy.defend_base_on_attack and enemies_near_base:
-            # Defend base immediately
+            # Defend base immediately with all arms
             def_target = enemies_near_base.closest_to(main_base).position
             self.micro.micro_bio(bio, enemy_units, def_target)
+            self.micro.micro_reapers(reapers, enemy_units, def_target, bio_center)
+            self.micro.micro_ghosts(ghosts, enemy_units, def_target, bio_center)
             self.micro.micro_tanks(mobile_tanks, sieged_tanks, enemy_units, def_target, bio_center)
+            self.micro.micro_hellbats(hellbats, enemy_units, def_target, bio_center)
+            self.micro.micro_hellions(hellions, enemy_units, def_target, bio_center)
+            self.micro.micro_widowmines(widowmines, enemy_units, def_target, bio_center)
+            self.micro.micro_cyclones(cyclones, enemy_units, def_target, bio_center)
+            self.micro.micro_thors(thors, enemy_units, def_target, bio_center)
             self.micro.micro_medivacs(medivacs, bio, bio_center)
+            self.micro.micro_vikings(vikings, enemy_units, def_target, bio_center)
+            self.micro.micro_liberators(liberators, enemy_units, def_target, bio_center)
+            self.micro.micro_ravens(ravens, enemy_units, def_target, bio_center)
+            self.micro.micro_banshees(banshees, enemy_units, def_target, bio_center)
+            self.micro.micro_battlecruisers(battlecruisers, enemy_units, def_target)
         elif total_combat_army >= self.strategy.attack_army_threshold:
-            # Full Assault with Siege Push!
+            # Full Combined Arms Assault Push!
             self.micro.micro_bio(bio, enemy_units, target_pos)
+            self.micro.micro_reapers(reapers, enemy_units, target_pos, bio_center)
+            self.micro.micro_ghosts(ghosts, enemy_units, target_pos, bio_center)
             self.micro.micro_tanks(mobile_tanks, sieged_tanks, enemy_units, target_pos, bio_center)
+            self.micro.micro_hellbats(hellbats, enemy_units, target_pos, bio_center)
+            self.micro.micro_hellions(hellions, enemy_units, target_pos, bio_center)
+            self.micro.micro_widowmines(widowmines, enemy_units, target_pos, bio_center)
+            self.micro.micro_cyclones(cyclones, enemy_units, target_pos, bio_center)
+            self.micro.micro_thors(thors, enemy_units, target_pos, bio_center)
             self.micro.micro_medivacs(medivacs, bio, bio_center)
+            self.micro.micro_vikings(vikings, enemy_units, target_pos, bio_center)
+            self.micro.micro_liberators(liberators, enemy_units, target_pos, bio_center)
+            self.micro.micro_ravens(ravens, enemy_units, target_pos, bio_center)
+            self.micro.micro_banshees(banshees, enemy_units, target_pos, bio_center)
+            self.micro.micro_battlecruisers(battlecruisers, enemy_units, target_pos)
         else:
             # Defense Anchor Mode:
-            # Bio holds rally point, Siege Tanks siege down at the perimeter to shred incoming attacks
             self.micro.micro_bio(bio, enemy_units, rally_point)
+            self.micro.micro_reapers(reapers, enemy_units, rally_point, rally_point)
+            self.micro.micro_ghosts(ghosts, enemy_units, rally_point, rally_point)
             self.micro.micro_defense_tanks(mobile_tanks, sieged_tanks, enemy_units, rally_point)
+            self.micro.micro_hellbats(hellbats, enemy_units, rally_point, rally_point)
+            self.micro.micro_hellions(hellions, enemy_units, rally_point, rally_point)
+            self.micro.micro_widowmines(widowmines, enemy_units, rally_point, rally_point)
+            self.micro.micro_cyclones(cyclones, enemy_units, rally_point, rally_point)
+            self.micro.micro_thors(thors, enemy_units, rally_point, rally_point)
             self.micro.micro_medivacs(medivacs, bio, rally_point)
+            self.micro.micro_vikings(vikings, enemy_units, rally_point, rally_point)
+            self.micro.micro_liberators(liberators, enemy_units, rally_point, rally_point)
+            self.micro.micro_ravens(ravens, enemy_units, rally_point, rally_point)
+            self.micro.micro_banshees(banshees, enemy_units, rally_point, rally_point)
+            self.micro.micro_battlecruisers(battlecruisers, enemy_units, rally_point)
 
         # 16. Live brief in console
         now = time.time()
@@ -641,12 +989,28 @@ class CoachedTerranBot(BotAI):
             mins, secs = divmod(game_sec, 60)
             turret_count = self.structures(UnitTypeId.MISSILETURRET).ready.amount
             orbital_count = self.townhalls(UnitTypeId.ORBITALCOMMAND).ready.amount
+
+            extra_parts = []
+            if thors: extra_parts.append(f"토르:{len(thors)}")
+            if vikings: extra_parts.append(f"바이킹:{len(vikings)}")
+            if hellbats: extra_parts.append(f"화기병:{len(hellbats)}")
+            if battlecruisers: extra_parts.append(f"배틀:{len(battlecruisers)}")
+            if ghosts: extra_parts.append(f"유령:{len(ghosts)}")
+            if cyclones: extra_parts.append(f"사이클론:{len(cyclones)}")
+            if liberators: extra_parts.append(f"해방선:{len(liberators)}")
+            if ravens: extra_parts.append(f"밤까:{len(ravens)}")
+            if banshees: extra_parts.append(f"밴시:{len(banshees)}")
+            if widowmines: extra_parts.append(f"지뢰:{len(widowmines)}")
+            if reapers: extra_parts.append(f"사신:{len(reapers)}")
+            if hellions: extra_parts.append(f"화염차:{len(hellions)}")
+            extra_str = f" | {' '.join(extra_parts)}" if extra_parts else ""
+
             print(
                 f"[AI 브리핑] [{mins:02d}:{secs:02d}] "
                 f"기지: {cc_list.amount}개(궤도:{orbital_count}) | 미네랄: {self.minerals} | 가스: {self.vespene} | "
                 f"일꾼: {len(workers)}/{dynamic_worker_cap}(상한:{self.strategy.max_workers}) | "
                 f"해병: {len(marines)} | 불곰: {len(marauders)} | 전차: {len(tanks)}(시즈:{len(sieged_tanks)}) | "
-                f"의료선: {len(medivacs)} | 포탑: {turret_count} (군대: {total_combat_army}/{self.strategy.attack_army_threshold}) | {status}"
+                f"의료선: {len(medivacs)}{extra_str} (군대: {total_combat_army}/{self.strategy.attack_army_threshold}) | {status}"
             )
 
         # 17. Live Telemetry Export for Web Dashboard & Radar Broadcast
@@ -688,6 +1052,24 @@ class CoachedTerranBot(BotAI):
             friendly_units=friendly_dots,
             enemy_units=enemy_dots,
             defense_anchor=(rally_point.x, rally_point.y) if rally_point else None,
+            thors_count=len(thors),
+            hellbats_count=len(hellbats),
+            vikings_count=len(vikings),
+            bcs_count=len(battlecruisers),
         )
+
+    async def on_end(self, game_result: Result):
+        """Called automatically by python-sc2 at match conclusion to trigger reinforcement learning updates."""
+        try:
+            res_str = game_result.name.capitalize() if hasattr(game_result, "name") else str(game_result)
+            self.unit_optimizer.update_after_match(
+                enemy_race=self.actual_enemy_race,
+                result=res_str,
+                duration=self.time,
+                units_built=self.units_produced_tracker,
+            )
+            print(f"\n[RL 가중치 최적화] {self.actual_enemy_race}전 매치 결과({res_str}) 기반 16종 유닛 생산 가중치 강화학습 갱신 완료!\n")
+        except Exception as e:
+            print(f"[RL 가중치 최적화 경고] on_end 가중치 업데이트 오류: {e}")
 
 
