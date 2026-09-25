@@ -1,4 +1,4 @@
-"""StarCraft II Coached AI Runner with Auto Zombie Cleanup, Safe Exception Handling, and Pause-on-Exit."""
+﻿"""StarCraft II Coached AI Runner with Auto Zombie Cleanup, Safe Exception Handling, and Pause-on-Exit."""
 
 import os
 import sys
@@ -9,7 +9,7 @@ import argparse
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 
-os.environ["SC2PATH"] = r"F:\Game\StarCraft II"
+os.environ["SC2PATH"] = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
 
 from sc2 import maps
 from sc2.data import Difficulty, Race

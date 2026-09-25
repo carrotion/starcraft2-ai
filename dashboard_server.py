@@ -1,4 +1,4 @@
-"""FastAPI Web Dashboard Server for StarCraft II Autonomous AI."""
+﻿"""FastAPI Web Dashboard Server for StarCraft II Autonomous AI."""
 
 import os
 import sys
@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
-os.environ["SC2PATH"] = r"F:\Game\StarCraft II"
+os.environ["SC2PATH"] = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
 
 from src.sc2_learning.evaluator import AutonomousEvaluator
 from src.sc2_learning.live_telemetry import get_latest_telemetry, get_all_active_workers
@@ -150,8 +150,9 @@ async def play_replay(filename: str):
         return {"status": "error", "message": f"리플레이 파일을 찾을 수 없습니다: {clean_filename}"}
 
     try:
-        switcher_64 = r"F:\Game\StarCraft II\Support64\SC2Switcher_x64.exe"
-        switcher_32 = r"F:\Game\StarCraft II\Support\SC2Switcher.exe"
+        sc2_root = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
+        switcher_64 = os.path.join(sc2_root, "Support64", "SC2Switcher_x64.exe")
+        switcher_32 = os.path.join(sc2_root, "Support", "SC2Switcher.exe")
         if os.path.exists(switcher_64):
             subprocess.Popen([switcher_64, fp])
         elif os.path.exists(switcher_32):

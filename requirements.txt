@@ -11,3 +11,7 @@ tensorboard
 pillow
 tqdm
 rich
+sc2
+fastapi
+uvicorn
+pydantic
