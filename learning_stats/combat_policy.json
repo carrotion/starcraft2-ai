@@ -1,0 +1,42 @@
+{
+  "TERRAN": {
+    "focus_fire_rate": 0.85,
+    "kiting_distance": 3.2,
+    "stim_health_threshold": 22.0,
+    "retreat_hp_pct": 0.28,
+    "yamato_min_hp": 180.0,
+    "emp_energy_shield": 40.0,
+    "tank_siege_range": 12.5,
+    "snipe_hp_threshold": 120.0
+  },
+  "PROTOSS": {
+    "focus_fire_rate": 0.9,
+    "kiting_distance": 3.4,
+    "stim_health_threshold": 20.0,
+    "retreat_hp_pct": 0.3,
+    "yamato_min_hp": 200.0,
+    "emp_energy_shield": 35.0,
+    "tank_siege_range": 13.0,
+    "snipe_hp_threshold": 100.0
+  },
+  "ZERG": {
+    "focus_fire_rate": 0.82,
+    "kiting_distance": 3.59,
+    "stim_health_threshold": 24.0,
+    "retreat_hp_pct": 0.23,
+    "yamato_min_hp": 220.0,
+    "emp_energy_shield": 45.0,
+    "tank_siege_range": 12.0,
+    "snipe_hp_threshold": 150.0
+  },
+  "DEFAULT": {
+    "focus_fire_rate": 0.85,
+    "kiting_distance": 3.3,
+    "stim_health_threshold": 22.0,
+    "retreat_hp_pct": 0.28,
+    "yamato_min_hp": 180.0,
+    "emp_energy_shield": 40.0,
+    "tank_siege_range": 12.5,
+    "snipe_hp_threshold": 120.0
+  }
+}

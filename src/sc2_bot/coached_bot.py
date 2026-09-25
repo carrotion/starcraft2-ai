@@ -14,6 +14,7 @@ from src.sc2_bot.strategy_guide import StrategyConfig, CURRENT_STRATEGY
 from src.sc2_bot.micro_controller import TerranMicroController
 from src.sc2_learning.live_telemetry import LiveTelemetry
 from src.sc2_learning.unit_optimizer import UnitOptimizer, ALL_16_UNITS
+from src.sc2_learning.combat_policy import CombatPolicyOptimizer
 
 
 class CoachedTerranBot(BotAI):
@@ -23,6 +24,7 @@ class CoachedTerranBot(BotAI):
         super().__init__()
         self.strategy = strategy or CURRENT_STRATEGY
         self.worker_id = worker_id
+        self.combat_policy = CombatPolicyOptimizer()
         self.micro = TerranMicroController(self)
         self.telemetry = LiveTelemetry(worker_id)
         self.unit_optimizer = UnitOptimizer()
@@ -704,6 +706,12 @@ class CoachedTerranBot(BotAI):
                     slab.research(UpgradeId.BANSHEESPEED)
 
         # 14. Unit Production (자율 16종 전 유닛 복합 생산 체제)
+        # 14. Unit Production (자율 16종 전 유닛 복합 생산 체제 - 하드 제약 철폐 및 유연한 효용 점수화)
+        # Helper: Soft Diminishing Utility Function (강제 상한선 없이 비례 샘플링 허용)
+        def unit_utility(u_name: str, count: int, scale: float = 0.10) -> float:
+            base_w = effective_weights.get(u_name, 0.5)
+            return round(base_w / (1.0 + count * scale), 4)
+
         # 14-A. Barracks Production (해병, 사신, 불곰, 유령)
         marine_count = self.units(UnitTypeId.MARINE).amount + self.already_pending(UnitTypeId.MARINE)
         reaper_count = self.units(UnitTypeId.REAPER).amount + self.already_pending(UnitTypeId.REAPER)
@@ -725,19 +733,19 @@ class CoachedTerranBot(BotAI):
             candidates = []
 
             if has_techlab:
-                if self.strategy.train_ghosts and ghost_academy_ready and ghost_count < (5 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.GHOST) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("ghost", 0.5), UnitTypeId.GHOST, "ghost"))
+                if self.strategy.train_ghosts and ghost_academy_ready and self.can_afford(UnitTypeId.GHOST) and self.supply_left >= 2:
+                    candidates.append((unit_utility("ghost", ghost_count, 0.20), UnitTypeId.GHOST, "ghost"))
                 if self.strategy.train_marauders and self.can_afford(UnitTypeId.MARAUDER) and self.vespene >= 25 and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("marauder", 1.0), UnitTypeId.MARAUDER, "marauder"))
-                if self.strategy.train_reapers and reaper_count < (2 if total_cc >= 3 else 1) and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
-                    candidates.append((effective_weights.get("reaper", 0.3), UnitTypeId.REAPER, "reaper"))
+                    candidates.append((unit_utility("marauder", marauder_count, 0.05), UnitTypeId.MARAUDER, "marauder"))
+                if self.strategy.train_reapers and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
+                    candidates.append((unit_utility("reaper", reaper_count, 0.50), UnitTypeId.REAPER, "reaper"))
                 if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
-                    candidates.append((effective_weights.get("marine", 1.2), UnitTypeId.MARINE, "marine"))
+                    candidates.append((unit_utility("marine", marine_count, 0.03), UnitTypeId.MARINE, "marine"))
             else:
-                if self.strategy.train_reapers and reaper_count < (2 if total_cc >= 3 else 1) and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
-                    candidates.append((effective_weights.get("reaper", 0.3), UnitTypeId.REAPER, "reaper"))
+                if self.strategy.train_reapers and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
+                    candidates.append((unit_utility("reaper", reaper_count, 0.50), UnitTypeId.REAPER, "reaper"))
                 if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
-                    candidates.append((effective_weights.get("marine", 1.2), UnitTypeId.MARINE, "marine"))
+                    candidates.append((unit_utility("marine", marine_count, 0.03), UnitTypeId.MARINE, "marine"))
 
             if candidates:
                 candidates.sort(key=lambda c: c[0], reverse=True)
@@ -772,27 +780,27 @@ class CoachedTerranBot(BotAI):
             candidates = []
 
             if has_techlab:
-                if self.strategy.train_thors and armory_ready and thor_count < (4 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.THOR) and self.supply_left >= 6:
-                    candidates.append((effective_weights.get("thor", 0.8), UnitTypeId.THOR, "thor"))
-                if self.strategy.train_siege_tanks and tank_count < (8 if total_cc >= 3 else 4) and self.can_afford(UnitTypeId.SIEGETANK) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("siegetank", 1.3), UnitTypeId.SIEGETANK, "siegetank"))
-                if self.strategy.train_cyclones and cyclone_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("cyclone", 0.7), UnitTypeId.CYCLONE, "cyclone"))
-                if self.strategy.train_widow_mines and mine_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("widowmine", 0.6), UnitTypeId.WIDOWMINE, "widowmine"))
-                if self.strategy.train_hellbats and armory_ready and hellbat_count < (8 if total_cc >= 3 else 4) and self.can_afford(UnitTypeId.HELLIONTANK) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("hellbat", 0.8), UnitTypeId.HELLIONTANK, "hellbat"))
-                if self.strategy.train_hellions and hellion_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.HELLION) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("hellion", 0.5), UnitTypeId.HELLION, "hellion"))
+                if self.strategy.train_thors and armory_ready and self.can_afford(UnitTypeId.THOR) and self.supply_left >= 6:
+                    candidates.append((unit_utility("thor", thor_count, 0.12), UnitTypeId.THOR, "thor"))
+                if self.strategy.train_siege_tanks and self.can_afford(UnitTypeId.SIEGETANK) and self.supply_left >= 3:
+                    candidates.append((unit_utility("siegetank", tank_count, 0.08), UnitTypeId.SIEGETANK, "siegetank"))
+                if self.strategy.train_cyclones and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
+                    candidates.append((unit_utility("cyclone", cyclone_count, 0.10), UnitTypeId.CYCLONE, "cyclone"))
+                if self.strategy.train_widow_mines and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
+                    candidates.append((unit_utility("widowmine", mine_count, 0.10), UnitTypeId.WIDOWMINE, "widowmine"))
+                if self.strategy.train_hellbats and armory_ready and self.can_afford(UnitTypeId.HELLIONTANK) and self.supply_left >= 2:
+                    candidates.append((unit_utility("hellbat", hellbat_count, 0.08), UnitTypeId.HELLIONTANK, "hellbat"))
+                if self.strategy.train_hellions and self.can_afford(UnitTypeId.HELLION) and self.supply_left >= 2:
+                    candidates.append((unit_utility("hellion", hellion_count, 0.12), UnitTypeId.HELLION, "hellion"))
             else:
-                if self.strategy.train_cyclones and cyclone_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("cyclone", 0.7), UnitTypeId.CYCLONE, "cyclone"))
-                if self.strategy.train_widow_mines and mine_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("widowmine", 0.6), UnitTypeId.WIDOWMINE, "widowmine"))
-                if self.strategy.train_hellbats and armory_ready and hellbat_count < (8 if total_cc >= 3 else 4) and self.can_afford(UnitTypeId.HELLIONTANK) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("hellbat", 0.8), UnitTypeId.HELLIONTANK, "hellbat"))
-                if self.strategy.train_hellions and hellion_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.HELLION) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("hellion", 0.5), UnitTypeId.HELLION, "hellion"))
+                if self.strategy.train_cyclones and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
+                    candidates.append((unit_utility("cyclone", cyclone_count, 0.10), UnitTypeId.CYCLONE, "cyclone"))
+                if self.strategy.train_widow_mines and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
+                    candidates.append((unit_utility("widowmine", mine_count, 0.10), UnitTypeId.WIDOWMINE, "widowmine"))
+                if self.strategy.train_hellbats and armory_ready and self.can_afford(UnitTypeId.HELLIONTANK) and self.supply_left >= 2:
+                    candidates.append((unit_utility("hellbat", hellbat_count, 0.08), UnitTypeId.HELLIONTANK, "hellbat"))
+                if self.strategy.train_hellions and self.can_afford(UnitTypeId.HELLION) and self.supply_left >= 2:
+                    candidates.append((unit_utility("hellion", hellion_count, 0.12), UnitTypeId.HELLION, "hellion"))
 
             if candidates:
                 candidates.sort(key=lambda c: c[0], reverse=True)
@@ -829,25 +837,39 @@ class CoachedTerranBot(BotAI):
             candidates = []
 
             if has_techlab:
-                if self.strategy.train_battlecruisers and fusion_ready and bc_count < (5 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.BATTLECRUISER) and self.supply_left >= 6:
-                    candidates.append((effective_weights.get("battlecruiser", 0.8), UnitTypeId.BATTLECRUISER, "battlecruiser"))
-                if self.strategy.train_ravens and raven_count < (3 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.RAVEN) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("raven", 0.6), UnitTypeId.RAVEN, "raven"))
-                if self.strategy.train_banshees and banshee_count < (4 if total_cc >= 3 else 2) and self.can_afford(UnitTypeId.BANSHEE) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("banshee", 0.5), UnitTypeId.BANSHEE, "banshee"))
-                if self.strategy.train_medivacs and medivac_count < 4 and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("medivac", 0.9), UnitTypeId.MEDIVAC, "medivac"))
-                if self.strategy.train_vikings and viking_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("viking", 1.0), UnitTypeId.VIKINGFIGHTER, "viking"))
-                if self.strategy.train_liberators and lib_count < 4 and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("liberator", 0.6), UnitTypeId.LIBERATOR, "liberator"))
+                if self.strategy.train_battlecruisers and fusion_ready and self.can_afford(UnitTypeId.BATTLECRUISER) and self.supply_left >= 6:
+                    candidates.append((unit_utility("battlecruiser", bc_count, 0.10), UnitTypeId.BATTLECRUISER, "battlecruiser"))
+                if self.strategy.train_ravens and self.can_afford(UnitTypeId.RAVEN) and self.supply_left >= 3:
+                    candidates.append((unit_utility("raven", raven_count, 0.35), UnitTypeId.RAVEN, "raven"))
+                if self.strategy.train_banshees and self.can_afford(UnitTypeId.BANSHEE) and self.supply_left >= 3:
+                    candidates.append((unit_utility("banshee", banshee_count, 0.15), UnitTypeId.BANSHEE, "banshee"))
+                if self.strategy.train_medivacs and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
+                    candidates.append((unit_utility("medivac", medivac_count, 0.18), UnitTypeId.MEDIVAC, "medivac"))
+                if self.strategy.train_vikings and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
+                    candidates.append((unit_utility("viking", viking_count, 0.10), UnitTypeId.VIKINGFIGHTER, "viking"))
+                if self.strategy.train_liberators and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
+                    candidates.append((unit_utility("liberator", lib_count, 0.15), UnitTypeId.LIBERATOR, "liberator"))
             else:
-                if self.strategy.train_medivacs and medivac_count < 4 and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("medivac", 0.9), UnitTypeId.MEDIVAC, "medivac"))
-                if self.strategy.train_vikings and viking_count < (6 if total_cc >= 3 else 3) and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
-                    candidates.append((effective_weights.get("viking", 1.0), UnitTypeId.VIKINGFIGHTER, "viking"))
-                if self.strategy.train_liberators and lib_count < 4 and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
-                    candidates.append((effective_weights.get("liberator", 0.6), UnitTypeId.LIBERATOR, "liberator"))
+                if self.strategy.train_medivacs and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
+                    candidates.append((unit_utility("medivac", medivac_count, 0.18), UnitTypeId.MEDIVAC, "medivac"))
+                if self.strategy.train_vikings and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
+                    candidates.append((unit_utility("viking", viking_count, 0.10), UnitTypeId.VIKINGFIGHTER, "viking"))
+                if self.strategy.train_liberators and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
+                    candidates.append((unit_utility("liberator", lib_count, 0.15), UnitTypeId.LIBERATOR, "liberator"))
+
+            if candidates:
+                candidates.sort(key=lambda c: c[0], reverse=True)
+                _, best_type, best_name = candidates[0]
+                starport.train(best_type)
+                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
+                if best_name == "battlecruiser":
+                    bc_count += 1
+                    self.telemetry.log_event("함대 출격: 전투순양함(Battlecruiser) 건조 착수!", "battlecruiser")
+                elif best_name == "raven": raven_count += 1
+                elif best_name == "banshee": banshee_count += 1
+                elif best_name == "medivac": medivac_count += 1
+                elif best_name == "viking": viking_count += 1
+                elif best_name == "liberator": lib_count += 1
 
             if candidates:
                 candidates.sort(key=lambda c: c[0], reverse=True)
@@ -1068,7 +1090,12 @@ class CoachedTerranBot(BotAI):
                 duration=self.time,
                 units_built=self.units_produced_tracker,
             )
-            print(f"\n[RL 가중치 최적화] {self.actual_enemy_race}전 매치 결과({res_str}) 기반 16종 유닛 생산 가중치 강화학습 갱신 완료!\n")
+            self.combat_policy.update_after_match(
+                enemy_race=self.actual_enemy_race,
+                result=res_str,
+                duration=self.time,
+            )
+            print(f"\n[RL 지능형 최적화] {self.actual_enemy_race}전 결과({res_str}) 기반 16종 조합 가중치 & 예술적 전투 마이크로 정책 강화학습 갱신 완료!\n")
         except Exception as e:
             print(f"[RL 가중치 최적화 경고] on_end 가중치 업데이트 오류: {e}")
 
