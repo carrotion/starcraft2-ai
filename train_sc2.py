@@ -99,18 +99,50 @@ def find_sc2_user_replay_dir() -> str | None:
 
 
 class TrackedBot(CoachedTerranBot):
-    """Subclass of CoachedTerranBot to capture game result directly."""
+    """Subclass of CoachedTerranBot to capture game result and actual enemy race."""
 
     def __init__(self, strategy: StrategyConfig, worker_id: int = 1):
         super().__init__(strategy, worker_id=worker_id)
         self.final_result = "Unknown"
         self.final_game_time = 0.0
+        self.actual_enemy_race = "Unknown"
 
     async def on_step(self, iteration: int):
         self.final_game_time = self.time
+
+        # Resolve actual enemy race if initially Random or Unknown
+        if self.actual_enemy_race in ("Unknown", "Random", "random"):
+            # 1. Direct enemy_race from python-sc2
+            if self.enemy_race and self.enemy_race != Race.Random:
+                self.actual_enemy_race = self.enemy_race.name
+            # 2. Check game_info players
+            elif hasattr(self, "game_info") and self.game_info.players:
+                opponents = [p for p in self.game_info.players if p.id != self.player_id]
+                if opponents:
+                    valid_races = [p.actual_race.name for p in opponents if p.actual_race and p.actual_race != Race.Random]
+                    if valid_races:
+                        self.actual_enemy_race = "+".join(valid_races)
+            # 3. Check observed enemy units or structures
+            if self.actual_enemy_race in ("Unknown", "Random", "random"):
+                if self.all_enemy_units:
+                    self.actual_enemy_race = self.all_enemy_units.first.race.name
+                elif self.enemy_structures:
+                    self.actual_enemy_race = self.enemy_structures.first.race.name
+
         await super().on_step(iteration)
 
     async def on_end(self, game_result: Result):
+        # Final resolution check at match conclusion
+        if self.actual_enemy_race in ("Unknown", "Random", "random"):
+            if hasattr(self, "game_info") and self.game_info.players:
+                opponents = [p for p in self.game_info.players if p.id != self.player_id]
+                if opponents:
+                    valid_races = [p.actual_race.name for p in opponents if p.actual_race and p.actual_race != Race.Random]
+                    if valid_races:
+                        self.actual_enemy_race = "+".join(valid_races)
+            if self.actual_enemy_race in ("Unknown", "Random", "random") and self.all_enemy_units:
+                self.actual_enemy_race = self.all_enemy_units.first.race.name
+
         if game_result == Result.Victory:
             self.final_result = "Victory"
         elif game_result == Result.Defeat:
@@ -130,7 +162,7 @@ def run_worker_game(
     difficulty_str: str,
     enemy_race: str,
     realtime: bool,
-) -> tuple[int, int, str, float, float, str, str]:
+) -> tuple[int, int, str, float, float, str, str, str]:
     """Runs a single SC2 match in an isolated worker process and saves the full .SC2Replay."""
     wall_start = time.time()
     strategy = StrategyConfig(**strategy_dict)
@@ -175,7 +207,16 @@ def run_worker_game(
                     shutil.copy2(replay_path, os.path.join(sc2_folder, replay_file))
             except Exception:
                 pass
-        return game_num, worker_id, result_str, bot_instance.final_game_time, wall_elapsed, saved_file, map_name
+        return (
+            game_num,
+            worker_id,
+            result_str,
+            bot_instance.final_game_time,
+            wall_elapsed,
+            saved_file,
+            map_name,
+            bot_instance.actual_enemy_race,
+        )
     except Exception as e:
         wall_elapsed = time.time() - wall_start
         res = bot_instance.final_result if bot_instance.final_result != "Unknown" else "Error"
@@ -188,7 +229,16 @@ def run_worker_game(
                     shutil.copy2(replay_path, os.path.join(sc2_folder, replay_file))
             except Exception:
                 pass
-        return game_num, worker_id, res, bot_instance.final_game_time, wall_elapsed, saved_file, map_name
+        return (
+            game_num,
+            worker_id,
+            res,
+            bot_instance.final_game_time,
+            wall_elapsed,
+            saved_file,
+            map_name,
+            bot_instance.actual_enemy_race,
+        )
 
 
 
@@ -241,7 +291,7 @@ def main():
                 chosen_map = resolve_game_map(map_arg, args.mode)
                 print(f"\n▶ [경기 #{game_idx}] 시작... (맵: {chosen_map}, 공격 임계치: {current_strat.attack_army_threshold})")
                 
-                g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map = run_worker_game(
+                g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map, resolved_race = run_worker_game(
                     game_num=game_idx,
                     worker_id=1,
                     strategy_dict=asdict(current_strat),
@@ -253,11 +303,16 @@ def main():
                 )
 
                 mins, secs = divmod(int(game_time), 60)
+                actual_enemy = (
+                    resolved_race
+                    if (resolved_race and resolved_race not in ("Unknown", "Random", "random"))
+                    else (args.enemy if args.mode == "1v1" else "zerg_protoss")
+                )
                 stats = evaluator.record_match(
                     game_num=g_num,
                     result=result_str,
                     game_duration_sec=game_time,
-                    enemy_race=args.enemy if args.mode == "1v1" else "zerg_protoss",
+                    enemy_race=actual_enemy,
                     difficulty=args.difficulty,
                     mode=args.mode,
                     strategy=current_strat,
@@ -269,7 +324,7 @@ def main():
                 current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time)
 
                 print("=" * 75)
-                print(f"  🏁 [경기 #{g_num} 종료] (맵: {played_map})")
+                print(f"  🏁 [경기 #{g_num} 종료] (상대: {actual_enemy.upper()}, 맵: {played_map})")
                 print(f"  - 경기 결과   : [ {result_str.upper()} ] (게임 시간: {mins:02d}분 {secs:02d}초 / 실제: {wall_elapsed:.1f}초)")
                 print(f"  - 누적 전적   : {stats['wins']}승 {stats['losses']}패 (승률: {stats['win_rate']}%, 최근10전: {stats['recent_10_win_rate']}%)")
                 if rep_file:
@@ -308,16 +363,21 @@ def main():
                 # Harvest results as they complete and dispatch next
                 while futures:
                     for fut in as_completed(list(futures.keys())):
-                        g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map = fut.result()
+                        g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map, resolved_race = fut.result()
                         del futures[fut]
                         completed_games += 1
 
                         mins, secs = divmod(int(game_time), 60)
+                        actual_enemy = (
+                            resolved_race
+                            if (resolved_race and resolved_race not in ("Unknown", "Random", "random"))
+                            else (args.enemy if args.mode == "1v1" else "zerg_protoss")
+                        )
                         stats = evaluator.record_match(
                             game_num=g_num,
                             result=result_str,
                             game_duration_sec=game_time,
-                            enemy_race=args.enemy if args.mode == "1v1" else "zerg_protoss",
+                            enemy_race=actual_enemy,
                             difficulty=args.difficulty,
                             mode=args.mode,
                             strategy=current_strat,
@@ -330,7 +390,7 @@ def main():
                         current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time)
 
                         print("=" * 75)
-                        print(f"  🏁 [워커 #{w_id}] 경기 #{g_num} 완료! [ {result_str.upper()} ] (맵: {played_map})")
+                        print(f"  🏁 [워커 #{w_id}] 경기 #{g_num} 완료! [ {result_str.upper()} ] (상대: {actual_enemy.upper()}, 맵: {played_map})")
                         print(f"  - 소요 시간   : 게임 내 {mins:02d}분 {secs:02d}초 (실제 소요: {wall_elapsed:.1f}초)")
                         print(f"  - 진행 상황   : {completed_games}/{args.games if target_games != float('inf') else '무한'} 완료")
                         print(f"  - 누적 전적   : {stats['wins']}승 {stats['losses']}패 (승률: {stats['win_rate']}%, 최근10전: {stats['recent_10_win_rate']}%)")
