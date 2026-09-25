@@ -252,7 +252,7 @@
         </div>
 
         <!-- Resources Bar -->
-        <div class="grid grid-cols-3 gap-2 text-center text-xs">
+        <div class="grid grid-cols-4 gap-2 text-center text-xs">
           <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
             <div class="text-slate-500 text-[10px]">미네랄</div>
             <div id="liveMinerals" class="font-bold font-sc2 text-blue-400 text-sm">0</div>
@@ -264,6 +264,10 @@
           <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
             <div class="text-slate-500 text-[10px]">보급 인구수</div>
             <div id="liveSupply" class="font-bold font-sc2 text-amber-400 text-sm">0 / 0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+            <div class="text-slate-500 text-[10px]">일꾼 (대기)</div>
+            <div id="liveWorkers" class="font-bold font-sc2 text-cyan-400 text-sm">0 <span id="liveIdleWorkers" class="text-xs text-slate-400 font-normal">(0)</span></div>
           </div>
         </div>
 
@@ -754,6 +758,12 @@
           document.getElementById('liveMinerals').innerText = telemetry.resources.minerals;
           document.getElementById('liveVespene').innerText = telemetry.resources.vespene;
           document.getElementById('liveSupply').innerText = `${telemetry.resources.supply_used} / ${telemetry.resources.supply_cap}`;
+
+          const wCount = (telemetry.resources && telemetry.resources.workers !== undefined) ? telemetry.resources.workers : (telemetry.army ? telemetry.army.workers : 0);
+          const idleWCount = (telemetry.resources && telemetry.resources.idle_workers !== undefined) ? telemetry.resources.idle_workers : (telemetry.army ? (telemetry.army.idle_workers || 0) : 0);
+          if (document.getElementById('liveWorkers')) {
+            document.getElementById('liveWorkers').innerHTML = `${wCount} <span id="liveIdleWorkers" class="text-xs ${idleWCount > 0 ? 'text-amber-400 font-bold' : 'text-slate-400 font-normal'}">(${idleWCount})</span>`;
+          }
 
           document.getElementById('hudMarines').innerText = telemetry.army.marines || 0;
           document.getElementById('hudMarauders').innerText = telemetry.army.marauders || 0;

@@ -55,6 +55,7 @@ class LiveTelemetry:
         hellbats_count: int = 0,
         vikings_count: int = 0,
         bcs_count: int = 0,
+        idle_workers_count: int = 0,
     ):
         """Dumps structured live game observation to disk for websocket streaming."""
         now = time.time()
@@ -75,9 +76,12 @@ class LiveTelemetry:
                 "vespene": vespene,
                 "supply_used": supply_used,
                 "supply_cap": supply_cap,
+                "workers": workers_count,
+                "idle_workers": idle_workers_count,
             },
             "army": {
                 "workers": workers_count,
+                "idle_workers": idle_workers_count,
                 "marines": marines_count,
                 "marauders": marauders_count,
                 "tanks_mobile": tanks_mobile,

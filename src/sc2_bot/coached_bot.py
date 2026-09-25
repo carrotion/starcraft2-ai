@@ -37,6 +37,7 @@ class CoachedTerranBot(BotAI):
         self.last_econ_sample_time: float = 0.0
         self.last_metrics = None
         self.last_fitness = None
+        self.unit_stuck_watch: dict[int, tuple[Point2, float]] = {}
 
 
 
@@ -127,7 +128,24 @@ class CoachedTerranBot(BotAI):
                     if self.mineral_field.closer_than(2.5, addon_pos):
                         continue
 
+                # 5. Clearance Aisles: Ensure production & tech buildings do not clump with distance < 4.2
+                # Center-to-center distance >= 4.2 guarantees at least a 1.2~1.5 tile walkway for Tanks, Thors, and Bio
+                if building in {UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT, UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY}:
+                    clumping = self.structures.filter(
+                        lambda s: s.type_id in {
+                            UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT,
+                            UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY, UnitTypeId.COMMANDCENTER
+                        } and s.distance_to(pos) < 4.3
+                    )
+                    if clumping:
+                        continue
+                elif building == UnitTypeId.SUPPLYDEPOT:
+                    # Depots should not block production building doorways
+                    if self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).closer_than(3.2, pos):
+                        continue
+
                 return pos
+
 
         # Fallback: strictly check height around main base with addon_place
         fallback_pos = await self.find_placement(
@@ -241,6 +259,15 @@ class CoachedTerranBot(BotAI):
         if len(workers) < dynamic_worker_cap and self.can_afford(UnitTypeId.SCV):
             for cc in cc_list.idle:
                 cc.train(UnitTypeId.SCV)
+
+        # Immediate recovery for idle workers (대기 일꾼 실시간 즉각 자원 채취 복귀)
+        if self.workers.idle and self.mineral_field:
+            for idle_scv in self.workers.idle:
+                closest_cc = cc_list.closest_to(idle_scv)
+                minerals_near = self.mineral_field.closer_than(10.0, closest_cc)
+                target_m = minerals_near.closest_to(idle_scv) if minerals_near else self.mineral_field.closest_to(idle_scv)
+                idle_scv.gather(target_m)
+
 
         # 3. Orbital Command Morphing & MULE / Scan Deployment (경제력 2배 부스팅)
         if self.strategy.upgrade_orbital and self.structures(UnitTypeId.BARRACKS).ready:
@@ -980,6 +1007,39 @@ class CoachedTerranBot(BotAI):
         else:
             rally_point = ramp_choke.towards(main_base.position, 3.5)
 
+        # Smart Production Rally: Direct newly produced units immediately towards the open frontline
+        for pb in self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).ready:
+            pb(AbilityId.RALLY_BUILDING, rally_point)
+
+        # Anti-Stuck & Trapped Unit Watchdog:
+        # Detect units trapped between structures for > 4.5 seconds and unstick them
+        now_time = self.time
+        for u in self.units.filter(lambda x: (x.can_attack_ground or x.can_attack_air or x.type_id == UnitTypeId.SCV) and not x.is_flying):
+            last_pos, stuck_time = self.unit_stuck_watch.get(u.tag, (u.position, now_time))
+            if u.distance_to(last_pos) < 0.3:
+                if now_time - stuck_time >= 4.5:
+                    # Unit is stuck in building maze!
+                    # 1. Give move order towards wide open rally point
+                    u.move(rally_point)
+                    # 2. If an adjacent production building is idle and has no active add-on research, lift off briefly!
+                    trapping_blds = self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).closer_than(3.2, u.position).idle
+                    for tb in trapping_blds:
+                        if not tb.is_flying and not tb.has_add_on:
+                            tb(AbilityId.LIFT)
+                            break
+                    self.unit_stuck_watch[u.tag] = (u.position, now_time)
+                else:
+                    self.unit_stuck_watch[u.tag] = (last_pos, stuck_time)
+            else:
+                self.unit_stuck_watch[u.tag] = (u.position, now_time)
+
+        # Land any lifted buildings once units have cleared
+        for fb in self.structures({UnitTypeId.BARRACKSFLYING, UnitTypeId.FACTORYFLYING, UnitTypeId.STARPORTFLYING}).idle:
+            if fb.distance_to(main_base.position) < 20:
+                land_pos = await self.find_placement(UnitTypeId.BARRACKS, near=fb.position)
+                if land_pos:
+                    fb(AbilityId.LAND, land_pos)
+
         bio_center = bio.center if bio else rally_point
         enemy_units = self.enemy_units
         enemy_structures = self.enemy_structures
@@ -1085,7 +1145,7 @@ class CoachedTerranBot(BotAI):
             print(
                 f"[AI 브리핑] [{mins:02d}:{secs:02d}] "
                 f"기지: {cc_list.amount}개(궤도:{orbital_count}) | 미네랄: {self.minerals} | 가스: {self.vespene} | "
-                f"일꾼: {len(workers)}/{dynamic_worker_cap}(상한:{self.strategy.max_workers}) | "
+                f"일꾼: {len(workers)}/{dynamic_worker_cap}(대기:{self.idle_worker_count}) | "
                 f"해병: {len(marines)} | 불곰: {len(marauders)} | 전차: {len(tanks)}(시즈:{len(sieged_tanks)}) | "
                 f"의료선: {len(medivacs)}{extra_str} (군대: {total_combat_army}/{self.strategy.attack_army_threshold}) | {status}"
             )
@@ -1133,7 +1193,9 @@ class CoachedTerranBot(BotAI):
             hellbats_count=len(hellbats),
             vikings_count=len(vikings),
             bcs_count=len(battlecruisers),
+            idle_workers_count=self.idle_worker_count,
         )
+
 
     async def on_end(self, game_result: Result):
         """Called automatically by python-sc2 at match conclusion to trigger reinforcement learning updates."""
