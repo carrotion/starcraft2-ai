@@ -252,21 +252,44 @@ class CoachedTerranBot(BotAI):
         other_ccs = cc_list.further_than(5, main_base)
         ramp_choke = self._safe_ramp_top_center(main_base.position.towards(self.game_info.map_center, 10))
 
-        # 2. Worker distribution & SCV production across all bases
+        # 2. Worker distribution, dynamic base-scaling capacity, and SCV production
         await self.distribute_workers()
         workers = self.workers
-        dynamic_worker_cap = min(self.strategy.max_workers, max(44, cc_list.amount * 22))
+
+        # Calculate true economic capacity based on active resource nodes:
+        # 16 per active CC minerals + 3 per active Refinery + 4 buffer when expanding
+        active_mineral_cap = sum(th.ideal_harvesters for th in self.townhalls.ready)
+        active_gas_cap = sum(ref.ideal_harvesters for ref in self.gas_buildings.ready)
+        pre_expansion_buffer = 4 if self.already_pending(UnitTypeId.COMMANDCENTER) > 0 else 0
+
+        # Exact optimal worker target tailored to active bases:
+        # 1 base (0 gas) -> 16
+        # 1 base (2 gas) -> 22 (+4 if natural expanding = 26)
+        # 2 bases (4 gas) -> 44 (+4 if 3rd base expanding = 48)
+        # 3 bases (6 gas) -> 66
+        # If bases deplete, ideal_harvesters automatically drops to prevent over-harvesting!
+        optimal_target_workers = max(16, active_mineral_cap + active_gas_cap + pre_expansion_buffer)
+        dynamic_worker_cap = min(self.strategy.max_workers, optimal_target_workers)
+
         if len(workers) < dynamic_worker_cap and self.can_afford(UnitTypeId.SCV):
             for cc in cc_list.idle:
                 cc.train(UnitTypeId.SCV)
 
-        # Immediate recovery for idle workers (대기 일꾼 실시간 즉각 자원 채취 복귀)
+        # Ensure Command Centers rally newly produced SCVs directly to the closest mineral patch
+        for cc in self.townhalls.ready:
+            near_minerals = self.mineral_field.closer_than(10.0, cc)
+            if near_minerals:
+                cc(AbilityId.RALLY_WORKERS, near_minerals.closest_to(cc))
+
+        # Immediate recovery for idle workers: send to bases that need harvesters
         if self.workers.idle and self.mineral_field:
             for idle_scv in self.workers.idle:
-                closest_cc = cc_list.closest_to(idle_scv)
-                minerals_near = self.mineral_field.closer_than(10.0, closest_cc)
+                needy_ccs = [c for c in cc_list.ready if c.assigned_harvesters < c.ideal_harvesters]
+                target_cc = needy_ccs[0] if needy_ccs else cc_list.closest_to(idle_scv)
+                minerals_near = self.mineral_field.closer_than(10.0, target_cc)
                 target_m = minerals_near.closest_to(idle_scv) if minerals_near else self.mineral_field.closest_to(idle_scv)
                 idle_scv.gather(target_m)
+
 
 
         # 3. Orbital Command Morphing & MULE / Scan Deployment (경제력 2배 부스팅)
@@ -1011,10 +1034,17 @@ class CoachedTerranBot(BotAI):
         for pb in self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).ready:
             pb(AbilityId.RALLY_BUILDING, rally_point)
 
-        # Anti-Stuck & Trapped Unit Watchdog:
-        # Detect units trapped between structures for > 4.5 seconds and unstick them
+        # Anti-Stuck & Trapped Combat Unit Watchdog:
+        # Detect combat ground units trapped between structures for > 4.5 seconds and unstick them
+        # CRITICAL: Exclude SCVs and MULEs completely! Harvesters have dedicated mining distribution.
         now_time = self.time
-        for u in self.units.filter(lambda x: (x.can_attack_ground or x.can_attack_air or x.type_id == UnitTypeId.SCV) and not x.is_flying):
+        combat_stuck_candidates = self.units.filter(
+            lambda x: (x.can_attack_ground or x.can_attack_air)
+            and x.type_id not in {UnitTypeId.SCV, UnitTypeId.MULE}
+            and not x.is_flying
+            and x.is_moving
+        )
+        for u in combat_stuck_candidates:
             last_pos, stuck_time = self.unit_stuck_watch.get(u.tag, (u.position, now_time))
             if u.distance_to(last_pos) < 0.3:
                 if now_time - stuck_time >= 4.5:
@@ -1032,6 +1062,7 @@ class CoachedTerranBot(BotAI):
                     self.unit_stuck_watch[u.tag] = (last_pos, stuck_time)
             else:
                 self.unit_stuck_watch[u.tag] = (u.position, now_time)
+
 
         # Land any lifted buildings once units have cleared
         for fb in self.structures({UnitTypeId.BARRACKSFLYING, UnitTypeId.FACTORYFLYING, UnitTypeId.STARPORTFLYING}).idle:
