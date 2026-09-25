@@ -1,0 +1,46 @@
+# Python Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Training Weights & Large Checkpoints
+checkpoints/
+*.zip
+*.pt
+*.pth
+*.onnx
+
+# StarCraft Replays & Recordings
+replays/
+*.SC2Replay
+*.rep
+
+# Logs & Temporary Debug Captures
+logs/
+debug/
+*.log
+
+# Live Telemetry & Learning Runtime Logs
+learning_stats/telemetry/
+learning_stats/*.log
+learning_stats/history.jsonl
+
+# IDE & Editor configs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local environment & secrets
+.env
+local_settings.json

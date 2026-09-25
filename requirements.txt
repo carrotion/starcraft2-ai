@@ -1,0 +1,13 @@
+torch
+torchvision
+gymnasium>=0.29.1
+stable-baselines3>=2.3.0
+numpy
+opencv-python
+mss
+pydirectinput
+pyyaml
+tensorboard
+pillow
+tqdm
+rich

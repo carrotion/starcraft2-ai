@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SC2 AI CommandCenter & Live Broadcast</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Noto+Sans+KR:wght@400;500;700&display=swap');
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      background-color: #0b0f19;
+      color: #e2e8f0;
+    }
+    .font-sc2 {
+      font-family: 'Orbitron', sans-serif;
+    }
+    .radar-canvas {
+      background: radial-gradient(circle, #0d1b2a 0%, #050a14 100%);
+      border: 1px solid #1e3a5f;
+      box-shadow: inset 0 0 20px rgba(0, 150, 255, 0.15), 0 0 15px rgba(0, 150, 255, 0.1);
+    }
+    .glow-cyan {
+      box-shadow: 0 0 15px rgba(6, 182, 212, 0.35);
+    }
+    .glow-blue {
+      box-shadow: 0 0 15px rgba(59, 130, 246, 0.35);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col p-4 md:p-6 select-none">
+
+  <!-- Top Header & Status Bar -->
+  <header class="flex flex-col md:flex-row items-center justify-between pb-4 mb-6 border-b border-slate-800 gap-4">
+    <div class="flex items-center gap-3">
+      <div class="p-2.5 bg-blue-950/70 border border-blue-500/40 rounded-xl text-blue-400 glow-blue">
+        <i data-lucide="shield-alert" class="w-7 h-7"></i>
+      </div>
+      <div>
+        <h1 class="text-2xl font-black tracking-wider text-white font-sc2 flex items-center gap-2">
+          STARCRAFT II <span class="text-cyan-400 text-sm font-normal px-2 py-0.5 bg-cyan-950/80 border border-cyan-500/30 rounded">AI BROADCAST</span>
+        </h1>
+        <p class="text-xs text-slate-400">인간-AI 협동 코칭 봇 & 병렬 멀티워커 대시보드</p>
+      </div>
+    </div>
+
+    <!-- Live Execution Status Badge -->
+    <div class="flex items-center gap-4">
+      <div id="statusBadge" class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-900 border border-slate-700 text-xs">
+        <span class="w-2.5 h-2.5 rounded-full bg-slate-500 animate-pulse"></span>
+        <span id="statusText" class="font-medium text-slate-300">대기 중 (IDLE)</span>
+      </div>
+      <div class="text-xs font-mono text-slate-400 bg-slate-900/80 px-3 py-1.5 rounded border border-slate-800">
+        서버 시간: <span id="serverTime" class="text-cyan-300">--:--:--</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Control Panel: CLI execution directly from Web Dashboard -->
+  <section class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 mb-6 backdrop-blur">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div class="flex flex-wrap items-center gap-4 text-xs">
+        <!-- Workers Selection -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">병렬 워커 수</label>
+          <select id="cfgWorkers" onchange="renderWorkerTabs(parseInt(this.value))" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="1">1개 (단일 관전)</option>
+            <option value="2">2개 동시</option>
+            <option value="4">4개 동시</option>
+            <option value="5" selected>5개 동시 (추천)</option>
+            <option value="8">8개 동시 (풀파워)</option>
+          </select>
+        </div>
+
+        <!-- Target Games -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">목표 경기 수</label>
+          <select id="cfgGames" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="10">10경기 (빠른 검증)</option>
+            <option value="50">50경기</option>
+            <option value="100" selected>100경기 (대규모 학습)</option>
+            <option value="0">무한 반복 (밤샘 모드)</option>
+          </select>
+        </div>
+
+        <!-- Mode -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">대전 모드</label>
+          <select id="cfgMode" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="1v1" selected>1 vs 1 (단판 승부)</option>
+            <option value="1v2">1 vs 2 (저그 & 프로토스 협공)</option>
+          </select>
+        </div>
+
+        <!-- Enemy Race -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">상대 종족</label>
+          <select id="cfgEnemy" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="zerg" selected>저그 (Zerg)</option>
+            <option value="protoss">프로토스 (Protoss)</option>
+            <option value="terran">테란 (Terran)</option>
+            <option value="random">랜덤 (Random)</option>
+          </select>
+        </div>
+
+        <!-- Difficulty -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">AI 난이도</label>
+          <select id="cfgDifficulty" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="veryhard" selected>아주 어려움 (Very Hard)</option>
+            <option value="hard">어려움 (Hard)</option>
+            <option value="insane">치트 광기 (Insane)</option>
+          </select>
+        </div>
+
+        <!-- Map Selection -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">대전 맵</label>
+          <select id="cfgMap" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="random" selected>🎲 래더 맵 랜덤 로테이션 (추천)</option>
+            <option value="Simple128">🗺️ Simple128 (128x128 쾌적한 평지)</option>
+            <option value="AcropolisLE">🏛️ AcropolisLE (공식 래더 1v1)</option>
+            <option value="CatalystLE">⚡ CatalystLE (공식 래더 1v1)</option>
+            <option value="AcidPlantLE">🌿 AcidPlantLE (공식 래더 1v1)</option>
+            <option value="ThunderbirdLE">🦅 ThunderbirdLE (중대형 래더)</option>
+            <option value="CactusValleyLE">🌵 CactusValleyLE (4인용 대형)</option>
+            <option value="Simple64">📦 Simple64 (64x64 초소형 테스트)</option>
+          </select>
+        </div>
+
+        <!-- Screen / Speed Mode -->
+        <div class="flex flex-col gap-1">
+          <label class="text-slate-400 font-medium">화면 / 속도 모드</label>
+          <select id="cfgRealtime" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-cyan-500">
+            <option value="false" selected>⚡ 초고속 가속 (2D 중계)</option>
+            <option value="true">📺 실시간 3D 화면 표시 (게임창 직접 관전)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-3">
+        <button id="btnStart" onclick="startTraining()" class="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-white bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 transition-all glow-cyan cursor-pointer">
+          <i data-lucide="play" class="w-4 h-4 fill-white"></i>
+          <span>학습 시작</span>
+        </button>
+        <button id="btnStop" onclick="stopTraining()" class="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-red-300 bg-red-950/80 border border-red-700/50 hover:bg-red-900/80 transition-all cursor-pointer disabled:opacity-50" disabled>
+          <i data-lucide="square" class="w-4 h-4 fill-red-300"></i>
+          <span>학습 중지</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- KPI Metrics Cards -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="bg-slate-900/70 border border-slate-800/80 rounded-xl p-4">
+      <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+        <span>총 학습 경기</span>
+        <i data-lucide="swords" class="w-4 h-4 text-cyan-400"></i>
+      </div>
+      <div id="statTotalGames" class="text-2xl font-black font-sc2 text-white">0</div>
+      <div class="text-[11px] text-slate-500 mt-1">누적 시뮬레이션 완료</div>
+    </div>
+
+    <div class="bg-slate-900/70 border border-slate-800/80 rounded-xl p-4">
+      <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+        <span>통산 승률</span>
+        <i data-lucide="trophy" class="w-4 h-4 text-amber-400"></i>
+      </div>
+      <div class="flex items-baseline gap-2">
+        <span id="statWinRate" class="text-2xl font-black font-sc2 text-amber-400">0.0%</span>
+        <span id="statWinLoss" class="text-xs text-slate-400">(0승 0패)</span>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1">전체 전적 통계</div>
+    </div>
+
+    <div class="bg-slate-900/70 border border-slate-800/80 rounded-xl p-4">
+      <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+        <span>최근 10경기 승률</span>
+        <i data-lucide="trending-up" class="w-4 h-4 text-emerald-400"></i>
+      </div>
+      <div id="statRecent10Rate" class="text-2xl font-black font-sc2 text-emerald-400">0.0%</div>
+      <div class="text-[11px] text-slate-500 mt-1">최신 폼 트렌드</div>
+    </div>
+
+    <div class="bg-slate-900/70 border border-slate-800/80 rounded-xl p-4">
+      <div class="flex items-center justify-between text-slate-400 text-xs mb-1">
+        <span>현재 가동 워커</span>
+        <i data-lucide="cpu" class="w-4 h-4 text-purple-400"></i>
+      </div>
+      <div id="statActiveWorkers" class="text-2xl font-black font-sc2 text-purple-400">0 / 0</div>
+      <div class="text-[11px] text-slate-500 mt-1">동시 병렬 대전 중</div>
+    </div>
+  </div>
+
+  <!-- Main Section: Live Broadcast & Tactical Radar -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+    
+    <!-- Left: 2D Radar Minimap (eSports Canvas) -->
+    <div class="lg:col-span-7 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
+          <h2 class="font-bold text-sm tracking-wider uppercase text-white font-sc2 flex items-center gap-2">
+            LIVE TACTICAL RADAR <span id="currentBroadcastWorker" class="text-cyan-400 text-xs normal-case">[워커 #1 중계 중]</span>
+          </h2>
+        </div>
+
+        <!-- Worker Selector Tabs for Live Broadcast -->
+        <div id="workerTabs" class="flex items-center gap-1.5 flex-wrap max-w-[420px] justify-end">
+          <!-- Dynamically generated based on active/configured workers (e.g. 1 to 8) -->
+        </div>
+      </div>
+
+      <!-- Radar Canvas -->
+      <div class="relative w-full aspect-square max-h-[460px] rounded-xl overflow-hidden flex items-center justify-center radar-canvas">
+        <canvas id="radarCanvas" width="460" height="460" class="w-full h-full"></canvas>
+        <div id="radarEmptyOverlay" class="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm">
+          <i data-lucide="radio" class="w-12 h-12 text-slate-600 mb-2 animate-pulse"></i>
+          <span class="text-sm font-semibold text-slate-400">레이더 신호 수신 대기 중</span>
+          <span class="text-xs text-slate-600 mt-1">[학습 시작] 버튼을 누르면 실시간 전장 중계가 켜집니다</span>
+        </div>
+      </div>
+
+      <!-- Minimap Legend -->
+      <div class="flex flex-wrap items-center justify-center gap-4 mt-3 text-[11px] text-slate-400">
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span> 아군 기지/보병</div>
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-yellow-400"></span> 공성 전차(시즈)</div>
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-400"></span> 의료선(공중)</div>
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500"></span> 적군 유닛</div>
+        <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-400"></span> 벙커 방어선</div>
+      </div>
+    </div>
+
+    <!-- Right: eSports Caster & Real-Time Tactical HUD -->
+    <div class="lg:col-span-5 flex flex-col gap-4">
+      
+      <!-- In-Game Resources & Army Composition HUD -->
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col gap-4">
+        <div class="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+          <div class="flex items-center gap-2">
+            <i data-lucide="activity" class="w-4 h-4 text-cyan-400"></i>
+            <span class="font-bold text-xs uppercase tracking-wider text-slate-300">인게임 전황 HUD</span>
+          </div>
+          <div class="text-sm font-black font-sc2 text-cyan-400" id="liveGameTime">00:00</div>
+        </div>
+
+        <!-- Resources Bar -->
+        <div class="grid grid-cols-3 gap-2 text-center text-xs">
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+            <div class="text-slate-500 text-[10px]">미네랄</div>
+            <div id="liveMinerals" class="font-bold font-sc2 text-blue-400 text-sm">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+            <div class="text-slate-500 text-[10px]">가스</div>
+            <div id="liveVespene" class="font-bold font-sc2 text-emerald-400 text-sm">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+            <div class="text-slate-500 text-[10px]">보급 인구수</div>
+            <div id="liveSupply" class="font-bold font-sc2 text-amber-400 text-sm">0 / 0</div>
+          </div>
+        </div>
+
+        <!-- Army Units Grid -->
+        <div class="grid grid-cols-4 gap-2 text-xs">
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">해병</span>
+            <div id="hudMarines" class="font-bold text-white text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">불곰</span>
+            <div id="hudMarauders" class="font-bold text-white text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">공성전차</span>
+            <div id="hudTanks" class="font-bold text-yellow-400 text-base">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-center">
+            <span class="text-slate-400 text-[10px]">의료선</span>
+            <div id="hudMedivacs" class="font-bold text-cyan-400 text-base">0</div>
+          </div>
+        </div>
+
+        <!-- Strategy Status Text -->
+        <div class="bg-blue-950/40 border border-blue-800/40 rounded-xl p-3 flex items-center gap-3">
+          <i data-lucide="crosshair" class="w-5 h-5 text-blue-400 shrink-0"></i>
+          <div>
+            <div class="text-[10px] text-blue-300 font-semibold uppercase">현재 전술 상태</div>
+            <div id="hudStatusText" class="text-xs font-bold text-white">방어선 구축 및 멀티 수급 중</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-Time Caster Commentary Logs -->
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col flex-1">
+        <div class="flex items-center gap-2 mb-3 border-b border-slate-800/80 pb-2">
+          <i data-lucide="mic" class="w-4 h-4 text-red-400 animate-pulse"></i>
+          <span class="font-bold text-xs uppercase tracking-wider text-slate-300">실시간 캐스터 해설 피드</span>
+        </div>
+        <div id="casterLogsList" class="flex flex-col gap-2 overflow-y-auto max-h-[180px] text-xs font-mono">
+          <div class="text-slate-500 italic text-[11px] text-center py-4">대기 중... 게임이 시작되면 실시간 중계 해설이 출력됩니다.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Bottom Section: Win Rate Chart & Match History Table -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <!-- Chart -->
+    <div class="lg:col-span-6 bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-bold text-sm text-white flex items-center gap-2">
+          <i data-lucide="line-chart" class="w-4 h-4 text-cyan-400"></i>
+          실시간 누적 승률 추이
+        </h3>
+      </div>
+      <div class="h-56">
+        <canvas id="winRateChart"></canvas>
+      </div>
+    </div>
+
+    <!-- History Table -->
+    <!-- History Table & Replay Player -->
+    <div class="lg:col-span-6 bg-slate-900/80 border border-slate-800 rounded-2xl p-5 flex flex-col">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <h3 class="font-bold text-sm text-white flex items-center gap-2">
+            <i data-lucide="history" class="w-4 h-4 text-amber-400"></i>
+            최근 경기 히스토리 & 리플레이
+          </h3>
+          <span class="text-[11px] text-slate-500 font-medium">전 경기 100% 자동 녹화</span>
+        </div>
+        <button onclick="openReplaysFolder()" class="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition cursor-pointer">
+          <i data-lucide="folder-open" class="w-3.5 h-3.5 text-amber-400"></i>
+          <span>리플레이 폴더</span>
+        </button>
+      </div>
+      <div class="overflow-x-auto flex-1 max-h-56 overflow-y-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="text-slate-400 uppercase bg-slate-950/60 border-b border-slate-800 sticky top-0">
+            <tr>
+              <th class="py-2 px-3">#</th>
+              <th class="py-2 px-3">결과</th>
+              <th class="py-2 px-3">대전 맵</th>
+              <th class="py-2 px-3">소요시간</th>
+              <th class="py-2 px-3">상대 종족</th>
+              <th class="py-2 px-3">난이도</th>
+              <th class="py-2 px-3 text-center">리플레이</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody" class="divide-y divide-slate-800/60">
+            <tr>
+              <td colspan="7" class="text-center py-6 text-slate-500 italic">경기 기록이 아직 없습니다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+
+    let currentWorkerId = 1;
+    let winRateChart = null;
+
+    // Initialize Chart.js
+    function initChart() {
+      const ctx = document.getElementById('winRateChart').getContext('2d');
+      winRateChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: '승률 (%)',
+            data: [],
+            borderColor: '#06b6d4',
+            backgroundColor: 'rgba(6, 182, 212, 0.1)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointBackgroundColor: '#06b6d4',
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { min: 0, max: 100, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#94a3b8' } },
+            x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#94a3b8' } }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+    }
+
+    let lastTabWorkerCount = 0;
+    let lastActiveWorkerKey = '';
+
+    // Dynamically render worker tabs based on active or configured workers (e.g. 1 to 8)
+    function renderWorkerTabs(workerCount, activeWorkerIds = []) {
+      const container = document.getElementById('workerTabs');
+      if (!container) return;
+
+      const count = Math.max(workerCount || 1, 1);
+      const activeKey = activeWorkerIds.slice().sort().join(',');
+
+      // If count and active list didn't change, just update selection state without recreating DOM
+      if (lastTabWorkerCount === count && lastActiveWorkerKey === activeKey && container.children.length === count) {
+        document.querySelectorAll('.w-tab').forEach(b => {
+          const wid = parseInt(b.getAttribute('data-wid'));
+          const isSelected = wid === currentWorkerId;
+          const isActive = activeWorkerIds.includes(wid);
+          
+          if (isSelected) {
+            b.className = 'w-tab px-2.5 py-1 text-xs rounded-lg font-bold bg-cyan-600 text-white cursor-pointer shadow-sm shadow-cyan-500/50 flex items-center gap-1.5';
+          } else if (isActive) {
+            b.className = 'w-tab px-2.5 py-1 text-xs rounded-lg font-bold bg-slate-800 text-cyan-300 hover:bg-slate-700 cursor-pointer flex items-center gap-1.5 border border-cyan-500/30';
+          } else {
+            b.className = 'w-tab px-2.5 py-1 text-xs rounded-lg font-bold bg-slate-900/80 text-slate-400 hover:bg-slate-800 cursor-pointer flex items-center gap-1.5';
+          }
+        });
+        return;
+      }
+
+      lastTabWorkerCount = count;
+      lastActiveWorkerKey = activeKey;
+
+      let html = '';
+      for (let wid = 1; wid <= count; wid++) {
+        const isSelected = wid === currentWorkerId;
+        const isActive = activeWorkerIds.includes(wid);
+        let cls = 'w-tab px-2.5 py-1 text-xs rounded-lg font-bold cursor-pointer transition flex items-center gap-1.5';
+        if (isSelected) {
+          cls += ' bg-cyan-600 text-white shadow-sm shadow-cyan-500/50';
+        } else if (isActive) {
+          cls += ' bg-slate-800 text-cyan-300 hover:bg-slate-700 border border-cyan-500/30';
+        } else {
+          cls += ' bg-slate-900/80 text-slate-400 hover:bg-slate-800';
+        }
+        html += `<button onclick="selectWorker(${wid})" class="${cls}" data-wid="${wid}">
+          <span class="w-1.5 h-1.5 rounded-full ${isActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}"></span>
+          <span>W#${wid}</span>
+        </button>`;
+      }
+      container.innerHTML = html;
+    }
+
+    // Select Broadcast Worker Tab
+    function selectWorker(wid) {
+      currentWorkerId = wid;
+      document.getElementById('currentBroadcastWorker').innerText = `[워커 #${wid} 중계 중]`;
+      document.querySelectorAll('.w-tab').forEach(b => {
+        const bWid = parseInt(b.getAttribute('data-wid'));
+        if (bWid === wid) {
+          b.className = 'w-tab px-2.5 py-1 text-xs rounded-lg font-bold bg-cyan-600 text-white cursor-pointer shadow-sm shadow-cyan-500/50 flex items-center gap-1.5';
+        } else {
+          b.className = 'w-tab px-2.5 py-1 text-xs rounded-lg font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer flex items-center gap-1.5';
+        }
+      });
+      updateDashboardData();
+    }
+
+    // Start Training API call
+    async function startTraining() {
+      const payload = {
+        workers: parseInt(document.getElementById('cfgWorkers').value),
+        games: parseInt(document.getElementById('cfgGames').value),
+        difficulty: document.getElementById('cfgDifficulty').value,
+        enemy: document.getElementById('cfgEnemy').value,
+        mode: document.getElementById('cfgMode').value,
+        map_name: document.getElementById('cfgMap').value,
+        realtime: document.getElementById('cfgRealtime').value === 'true'
+      };
+
+      try {
+        const res = await fetch('/api/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          updateRunningUI(true, payload.workers);
+        } else {
+          alert(data.message);
+        }
+      } catch (e) {
+        alert('서버 통신 오류: ' + e);
+      }
+    }
+
+    // Stop Training API call
+    async function stopTraining() {
+      try {
+        const res = await fetch('/api/stop', { method: 'POST' });
+        const data = await res.json();
+        updateRunningUI(false, 0);
+      } catch (e) {
+        alert('중지 오류: ' + e);
+      }
+    }
+
+    // Play Replay in StarCraft II client
+    async function playReplay(filename) {
+      try {
+        const res = await fetch('/api/replays/play/' + encodeURIComponent(filename), { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          // Toast or gentle alert
+          alert('🎬 ' + data.message + '\n\n잠시 후 스타크래프트 II 클라이언트가 실행되어 리플레이 관전 모드로 전환됩니다.');
+        } else {
+          alert('리플레이 실행 실패: ' + data.message);
+        }
+      } catch (err) {
+        alert('서버 통신 오류: ' + err);
+      }
+    }
+
+    // Open Replays Folder in Windows File Explorer
+    async function openReplaysFolder() {
+      try {
+        const res = await fetch('/api/replays/open_folder', { method: 'POST' });
+        const data = await res.json();
+        if (data.status !== 'success') {
+          alert('폴더 열기 실패: ' + data.message);
+        }
+      } catch (err) {
+        alert('폴더 열기 통신 오류: ' + err);
+      }
+    }
+
+    function updateRunningUI(running, workers) {
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      const badge = document.getElementById('statusBadge');
+      const text = document.getElementById('statusText');
+
+      if (running) {
+        btnStart.disabled = true;
+        btnStart.classList.add('opacity-50');
+        btnStop.disabled = false;
+        badge.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-950/80 border border-emerald-500/50 text-xs glow-cyan';
+        text.className = 'font-bold text-emerald-400';
+        text.innerText = `훈련 중 (${workers}개 병렬 가동)`;
+        document.getElementById('radarEmptyOverlay').style.display = 'none';
+      } else {
+        btnStart.disabled = false;
+        btnStart.classList.remove('opacity-50');
+        btnStop.disabled = true;
+        badge.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-900 border border-slate-700 text-xs';
+        text.className = 'font-medium text-slate-300';
+        text.innerText = '대기 중 (IDLE)';
+      }
+    }
+
+    // Draw Radar Minimap
+    function drawRadar(telemetry) {
+      const canvas = document.getElementById('radarCanvas');
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Draw Grid Lines
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      for (let i = 40; i < w; i += 40) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke();
+      }
+
+      if (!telemetry || !telemetry.map_size) {
+        return;
+      }
+
+      const mapW = telemetry.map_size.width || 128;
+      const mapH = telemetry.map_size.height || 128;
+
+      const scaleX = w / mapW;
+      const scaleY = h / mapH;
+
+      // Draw Defense Anchor
+      if (telemetry.radar.anchor) {
+        const ax = telemetry.radar.anchor.x * scaleX;
+        const ay = h - (telemetry.radar.anchor.y * scaleY);
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ax, ay, 14, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Draw Friendly Units
+      if (telemetry.radar.friendly) {
+        telemetry.radar.friendly.forEach(u => {
+          const ux = u.x * scaleX;
+          const uy = h - (u.y * scaleY);
+          if (u.t.includes('SIEGETANK')) {
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(ux - 3, uy - 3, 6, 6);
+          } else if (u.t.includes('MEDIVAC')) {
+            ctx.fillStyle = '#60a5fa';
+            ctx.beginPath(); ctx.arc(ux, uy, 4, 0, Math.PI * 2); ctx.fill();
+          } else if (u.t.includes('COMMAND') || u.t.includes('ORBITAL')) {
+            ctx.fillStyle = '#38bdf8';
+            ctx.fillRect(ux - 6, uy - 6, 12, 12);
+          } else if (u.t.includes('BUNKER')) {
+            ctx.fillStyle = '#34d399';
+            ctx.fillRect(ux - 4, uy - 4, 8, 8);
+          } else {
+            ctx.fillStyle = '#22d3ee';
+            ctx.beginPath(); ctx.arc(ux, uy, 2.5, 0, Math.PI * 2); ctx.fill();
+          }
+        });
+      }
+
+      // Draw Enemy Units
+      if (telemetry.radar.enemy) {
+        telemetry.radar.enemy.forEach(eu => {
+          const ex = eu.x * scaleX;
+          const ey = h - (eu.y * scaleY);
+          ctx.fillStyle = '#ef4444';
+          ctx.beginPath(); ctx.arc(ex, ey, 3.5, 0, Math.PI * 2); ctx.fill();
+        });
+      }
+    }
+
+    // Periodic Update Loop via REST API
+    async function updateDashboardData() {
+      document.getElementById('serverTime').innerText = new Date().toLocaleTimeString();
+
+      try {
+        // Fetch stats
+        const sRes = await fetch('/api/stats');
+        const stats = await sRes.json();
+
+        document.getElementById('statTotalGames').innerText = stats.total_games;
+        document.getElementById('statWinRate').innerText = stats.win_rate + '%';
+        document.getElementById('statWinLoss').innerText = `(${stats.wins}승 ${stats.losses}패)`;
+        document.getElementById('statRecent10Rate').innerText = stats.recent_10_win_rate + '%';
+
+        // Update Chart
+        if (winRateChart && stats.history_rates) {
+          winRateChart.data.labels = stats.history_rates.map((_, i) => `#${i + 1}`);
+          winRateChart.data.datasets[0].data = stats.history_rates;
+          winRateChart.update();
+        }
+
+        // Update History Table
+        if (stats.recent_history && stats.recent_history.length > 0) {
+          const tbody = document.getElementById('historyTableBody');
+          tbody.innerHTML = stats.recent_history.slice(-10).reverse().map(h => {
+            const isWin = h.result === 'Victory';
+            const badgeClass = isWin ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30' : 'bg-red-950/80 text-red-400 border border-red-500/30';
+            const mins = Math.floor(h.duration_sec / 60);
+            const secs = Math.floor(h.duration_sec % 60);
+            const replayBtn = h.replay_file ? `
+              <div class="flex items-center justify-center gap-1.5">
+                <button onclick="playReplay('${h.replay_file}')" class="flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600/90 hover:bg-blue-500 text-white font-bold text-[11px] transition shadow cursor-pointer" title="스타2 클라이언트로 즉시 3D 재생">
+                  <i data-lucide="play" class="w-3 h-3 fill-white"></i>
+                  <span>재생</span>
+                </button>
+                <a href="/api/replays/download/${encodeURIComponent(h.replay_file)}" download class="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition flex items-center justify-center" title="리플레이 파일 다운로드">
+                  <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                </a>
+              </div>
+            ` : `<span class="text-slate-600 text-[11px] text-center block">-</span>`;
+
+            return `
+              <tr class="hover:bg-slate-800/40">
+                <td class="py-2.5 px-3 font-mono font-bold text-slate-300">#${h.game_num}</td>
+                <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded text-[11px] font-bold ${badgeClass}">${h.result}</span></td>
+                <td class="py-2.5 px-3 text-cyan-300 font-mono text-[11px]">${h.map_name || 'Simple64'}</td>
+                <td class="py-2.5 px-3 text-slate-300 font-mono">${mins}분 ${secs}초</td>
+                <td class="py-2.5 px-3 uppercase text-slate-300">${h.enemy_race}</td>
+                <td class="py-2.5 px-3 uppercase text-slate-400">${h.difficulty}</td>
+                <td class="py-2.5 px-3">${replayBtn}</td>
+              </tr>
+            `;
+          }).join('');
+          lucide.createIcons();
+        }
+
+        // Fetch Status & active workers list
+        const stRes = await fetch('/api/status');
+        const status = await stRes.json();
+
+        let activeWorkers = [];
+        try {
+          const wRes = await fetch('/api/workers');
+          const wData = await wRes.json();
+          activeWorkers = wData.active_workers || [];
+        } catch (e) {}
+
+        const configuredWorkers = status.is_running && status.config && status.config.workers 
+          ? status.config.workers 
+          : parseInt(document.getElementById('cfgWorkers').value) || 5;
+
+        const maxWorkerToDisplay = Math.max(configuredWorkers, ...(activeWorkers.length ? activeWorkers : [1]), 1);
+        renderWorkerTabs(maxWorkerToDisplay, activeWorkers);
+
+        updateRunningUI(status.is_running, configuredWorkers);
+        document.getElementById('statActiveWorkers').innerText = status.is_running 
+          ? `${activeWorkers.length > 0 ? activeWorkers.length : configuredWorkers} / ${configuredWorkers}` 
+          : '0 / 0';
+
+        // Fetch Telemetry for current selected worker
+        const tRes = await fetch(`/api/telemetry/${currentWorkerId}`);
+        const telemetry = await tRes.json();
+
+        if (telemetry && telemetry.resources) {
+          document.getElementById('radarEmptyOverlay').style.display = 'none';
+          document.getElementById('liveGameTime').innerText = telemetry.game_time_str || '00:00';
+          document.getElementById('liveMinerals').innerText = telemetry.resources.minerals;
+          document.getElementById('liveVespene').innerText = telemetry.resources.vespene;
+          document.getElementById('liveSupply').innerText = `${telemetry.resources.supply_used} / ${telemetry.resources.supply_cap}`;
+
+          document.getElementById('hudMarines').innerText = telemetry.army.marines;
+          document.getElementById('hudMarauders').innerText = telemetry.army.marauders;
+          document.getElementById('hudTanks').innerText = `${telemetry.army.tanks_total} (${telemetry.army.tanks_sieged})`;
+          document.getElementById('hudMedivacs').innerText = telemetry.army.medivacs;
+          document.getElementById('hudStatusText').innerText = telemetry.status || '전투 대기 중';
+
+          // Caster logs
+          if (telemetry.caster_logs && telemetry.caster_logs.length > 0) {
+            const casterBox = document.getElementById('casterLogsList');
+            casterBox.innerHTML = telemetry.caster_logs.map(log => `
+              <div class="flex items-start gap-2 bg-slate-950/60 p-1.5 rounded border border-slate-800">
+                <span class="text-cyan-400 font-mono shrink-0">[${log.time}]</span>
+                <span class="text-slate-200">${log.text}</span>
+              </div>
+            `).join('');
+          }
+
+          drawRadar(telemetry);
+        } else if (!status.is_running) {
+          document.getElementById('radarEmptyOverlay').style.display = 'flex';
+        }
+
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initChart();
+      updateDashboardData();
+      setInterval(updateDashboardData, 1000);
+    });
+  </script>
+</body>
+</html>
