@@ -20,7 +20,7 @@
   - 공성 전차(Siege Tank): 최전선 거점 방어 시즈 모드 전환, 전선 진격 시 순차적 전진 배치
   - 의료선(Medivac): 후방 안전 비행 및 부상 바이오닉 치유
 
-### 2) 웹 관제 대시보드 & 실시간 중계 레이더
+### 3) 웹 관제 대시보드 & 실시간 중계 레이더
 - **실시간 웹 대시보드**: FastAPI + TailwindCSS 기반 브라우저 관제 시스템 (`http://127.0.0.1:8000`)
 - **실시간 택티컬 레이더 (Canvas Radar)**:
   - 아군 기지, 벙커 거점, 바이오닉/전차, 적 부대 위치를 60FPS 실시간 시각화
@@ -70,14 +70,42 @@ starcraft/
 
 ### 1) 환경 준비
 ```powershell
-# 가상환경 활성화 (Python 3.12 권장)
+# 1. 가상환경 생성 (최초 1회) - 폴더명은 반드시 .venv 로!
+#    (대시보드 학습 실행기(process_manager.py)가 .venv\Scripts\python.exe 를
+#    고정 참조합니다. venv 등 다른 이름이면 웹의 "학습 시작"이 실패합니다)
+python -m venv .venv
+
+# 2. 가상환경 활성화 (Python 3.12 권장)
 .venv\Scripts\activate
 
-# 패키지 설치
+# 3. 패키지 설치
 pip install -r requirements.txt
 ```
 
-### 2) 웹 관제 대시보드 실행
+> **주의**: 시스템 전역 Python에 바로 pip install 하지 마세요. 가상환경 활성화
+> 상태(프롬프트에 (.venv) 표시)에서 설치해야 의존성 충돌을 피할 수 있습니다.
+
+### 2) SC2PATH 환경변수 설정
+
+모든 실행 스크립트(run_sc2.py, train_sc2.py, dashboard_server.py)는 환경변수
+SC2PATH 를 우선 사용하며, 설정되어 있지 않을 때만 기본값 C:\Games\StarCraft II 를
+사용합니다. 게임이 다른 경로에 설치되어 있다면 아래와 같이 설정하세요.
+
+```powershell
+# 영구 설정 (시스템 환경변수 - 새 터미널부터 적용)
+setx SC2PATH "D:\Games\StarCraft II"
+
+# 또는 현재 터미널에만 임시 설정
+$env:SC2PATH = "D:\Games\StarCraft II"
+
+# 설정 확인
+echo $env:SC2PATH
+```
+
+- 경로는 Support64, Support 폴더가 있는 StarCraft II 설치 루트여야 합니다.
+- 시스템에 이미 SC2PATH 가 설정되어 있다면 코드가 그 값을 그대로 사용합니다.
+
+### 3) 웹 관제 대시보드 실행
 ```powershell
 # 관리자 권한으로 실행 (권장)
 .\run_dashboard_admin.bat
@@ -87,7 +115,7 @@ python dashboard_server.py
 ```
 브라우저에서 `http://127.0.0.1:8000` 접속 후 워커 수(1~8), 상대 종족, 난이도를 선택하고 **"학습 시작"**을 클릭합니다.
 
-### 3) 콘솔 직접 실행
+### 4) 콘솔 직접 실행
 ```powershell
 # 4개 프로세스 병렬 래더 경기 진행
 python train_sc2.py --workers 4 --difficulty VeryHard --races random

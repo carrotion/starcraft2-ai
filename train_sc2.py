@@ -1,4 +1,4 @@
-"""StarCraft II Autonomous Self-Learning & Parallel Multi-Worker Training Runner."""
+﻿"""StarCraft II Autonomous Self-Learning & Parallel Multi-Worker Training Runner."""
 
 import os
 import sys
@@ -15,7 +15,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
-os.environ["SC2PATH"] = r"F:\Game\StarCraft II"
+os.environ["SC2PATH"] = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
 
 from sc2 import maps
 from sc2.data import Difficulty, Race, Result

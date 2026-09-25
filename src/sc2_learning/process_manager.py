@@ -1,4 +1,4 @@
-"""Background Training Process Manager for SC2 Web Dashboard."""
+﻿"""Background Training Process Manager for SC2 Web Dashboard."""
 
 import os
 import sys
@@ -70,7 +70,7 @@ class TrainingProcessManager:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
-        env["SC2PATH"] = r"F:\Game\StarCraft II"
+        env["SC2PATH"] = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
 
         # Start non-blocking process with log redirect
         self.process = subprocess.Popen(
