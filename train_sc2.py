@@ -218,6 +218,8 @@ def run_worker_game(
             saved_file,
             map_name,
             bot_instance.actual_enemy_race,
+            bot_instance.last_fitness,
+            bot_instance.last_metrics,
         )
     except Exception as e:
         wall_elapsed = time.time() - wall_start
@@ -240,7 +242,10 @@ def run_worker_game(
             saved_file,
             map_name,
             bot_instance.actual_enemy_race,
+            getattr(bot_instance, "last_fitness", None),
+            getattr(bot_instance, "last_metrics", None),
         )
+
 
 
 
@@ -293,7 +298,7 @@ def main():
                 chosen_map = resolve_game_map(map_arg, args.mode)
                 print(f"\n▶ [경기 #{game_idx}] 시작... (맵: {chosen_map}, 공격 임계치: {current_strat.attack_army_threshold})")
                 
-                g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map, resolved_race = run_worker_game(
+                g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map, resolved_race, fitness, metrics = run_worker_game(
                     game_num=game_idx,
                     worker_id=1,
                     strategy_dict=asdict(current_strat),
@@ -321,14 +326,26 @@ def main():
                     notes=f"Wall time: {wall_elapsed:.1f}s",
                     replay_file=rep_file,
                     map_name=played_map,
+                    fitness=fitness,
+                    metrics=metrics,
                 )
 
-                current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time, enemy_race=actual_enemy)
+                current_strat = evaluator.evolve_strategy(
+                    current_strat, result_str, game_time, enemy_race=actual_enemy, fitness=fitness
+                )
 
                 print("=" * 75)
                 print(f"  🏁 [경기 #{g_num} 종료] (상대: {actual_enemy.upper()}, 맵: {played_map})")
                 print(f"  - 경기 결과   : [ {result_str.upper()} ] (게임 시간: {mins:02d}분 {secs:02d}초 / 실제: {wall_elapsed:.1f}초)")
-                print(f"  - 누적 전적   : {stats['wins']}승 {stats['losses']}패 (승률: {stats['win_rate']}%, 최근10전: {stats['recent_10_win_rate']}%)")
+                if fitness:
+                    print(
+                        f"  - 복합 피트니스 : {fitness.composite_score:+.1f}점 "
+                        f"(가성비 교환 {fitness.trade_ratio:.2f}:1, 소모율 {fitness.spending_ratio*100:.1f}%, 잉여감점 -{fitness.float_penalty:.1f}점)"
+                    )
+                print(
+                    f"  - 누적 전적   : {stats['wins']}승 {stats['losses']}패 (승률: {stats['win_rate']}%, 최근10전: {stats['recent_10_win_rate']}%) | "
+                    f"최근 평균가성비: {stats['avg_trade_ratio']:.2f}:1, 자원소모: {stats['avg_spending_ratio']:.1f}%"
+                )
                 if rep_file:
                     print(f"  - 리플레이    : replays/{rep_file}")
                 print("=" * 75)
@@ -365,7 +382,7 @@ def main():
                 # Harvest results as they complete and dispatch next
                 while futures:
                     for fut in as_completed(list(futures.keys())):
-                        g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map, resolved_race = fut.result()
+                        g_num, w_id, result_str, game_time, wall_elapsed, rep_file, played_map, resolved_race, fitness, metrics = fut.result()
                         del futures[fut]
                         completed_games += 1
 
@@ -386,19 +403,32 @@ def main():
                             notes=f"Worker #{w_id}, Wall time: {wall_elapsed:.1f}s",
                             replay_file=rep_file,
                             map_name=played_map,
+                            fitness=fitness,
+                            metrics=metrics,
                         )
 
                         # Auto-evolve strategy
-                        current_strat = evaluator.evolve_strategy(current_strat, result_str, game_time, enemy_race=actual_enemy)
+                        current_strat = evaluator.evolve_strategy(
+                            current_strat, result_str, game_time, enemy_race=actual_enemy, fitness=fitness
+                        )
 
                         print("=" * 75)
                         print(f"  🏁 [워커 #{w_id}] 경기 #{g_num} 완료! [ {result_str.upper()} ] (상대: {actual_enemy.upper()}, 맵: {played_map})")
                         print(f"  - 소요 시간   : 게임 내 {mins:02d}분 {secs:02d}초 (실제 소요: {wall_elapsed:.1f}초)")
+                        if fitness:
+                            print(
+                                f"  - 복합 피트니스 : {fitness.composite_score:+.1f}점 "
+                                f"(가성비 교환 {fitness.trade_ratio:.2f}:1, 소모율 {fitness.spending_ratio*100:.1f}%, 잉여감점 -{fitness.float_penalty:.1f}점)"
+                            )
                         print(f"  - 진행 상황   : {completed_games}/{args.games if target_games != float('inf') else '무한'} 완료")
-                        print(f"  - 누적 전적   : {stats['wins']}승 {stats['losses']}패 (승률: {stats['win_rate']}%, 최근10전: {stats['recent_10_win_rate']}%)")
+                        print(
+                            f"  - 누적 전적   : {stats['wins']}승 {stats['losses']}패 (승률: {stats['win_rate']}%, 최근10전: {stats['recent_10_win_rate']}%) | "
+                            f"최근 평균가성비: {stats['avg_trade_ratio']:.2f}:1, 자원소모: {stats['avg_spending_ratio']:.1f}%"
+                        )
                         if rep_file:
                             print(f"  - 리플레이    : replays/{rep_file}")
                         print("=" * 75)
+
 
 
                         # Dispatch next match if remaining

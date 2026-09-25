@@ -168,8 +168,9 @@ class UnitOptimizer:
         result: str,
         duration: float,
         units_built: Dict[str, int],
+        fitness_breakdown: Any = None,
     ):
-        """Reinforcement Learning update for unit weights based on match victory/defeat and army effectiveness."""
+        """Reinforcement Learning update for unit weights based on composite fitness, resource trade ratio, and spending efficiency."""
         norm_race = enemy_race.upper() if enemy_race else "DEFAULT"
         if norm_race not in self.race_weights:
             norm_race = "DEFAULT"
@@ -180,35 +181,64 @@ class UnitOptimizer:
         # Calculate unit production proportions
         proportions = {u: units_built.get(u, 0) / total_built for u in ALL_16_UNITS}
 
-        if result == "Victory":
-            # Positive Reinforcement: Increase weights of units that delivered the win
+        # Parse fitness metrics if provided
+        if fitness_breakdown is not None:
+            if hasattr(fitness_breakdown, "to_dict"):
+                fb = fitness_breakdown.to_dict()
+            elif isinstance(fitness_breakdown, dict):
+                fb = fitness_breakdown
+            else:
+                fb = {}
+        else:
+            fb = {}
+
+        composite_score = fb.get("composite_score", 100.0 if result == "Victory" else -35.0)
+        trade_ratio = fb.get("trade_ratio", 1.5 if result == "Victory" else 0.7)
+        spending_ratio = fb.get("spending_ratio", 0.85)
+
+        # 1. Cost-Effective Trade Reinforcement:
+        # If the unit composition achieved a profitable kill/loss exchange (trade_ratio >= 1.05) OR positive fitness,
+        # reinforce the active combat units even if the final result was a late-game loss!
+        if trade_ratio >= 1.05 or composite_score > 15.0:
+            trade_multiplier = min(2.5, max(1.0, trade_ratio))
             for u in ALL_16_UNITS:
                 if proportions[u] > 0.05:
-                    current[u] = min(3.0, current[u] + 0.15 * proportions[u] * 2.0)
-            
-            # If win in long game, reinforce late-game units
-            if duration > 600:
+                    bonus = 0.14 * proportions[u] * trade_multiplier
+                    current[u] = min(3.0, current[u] + bonus)
+
+            # Long game tech reinforcement
+            if duration > 600 and composite_score > 30.0:
                 current["battlecruiser"] = min(2.5, current["battlecruiser"] + 0.1)
                 current["thor"] = min(2.5, current["thor"] + 0.1)
 
-        elif result == "Defeat":
-            # Negative Reinforcement: Slightly dial down over-relied failing units
+        # 2. Deficit Trade & Ineffective Composition Penalty:
+        # If we suffered heavy resource losses (trade_ratio < 0.85 and composite_score < 0),
+        # penalize over-used units that were caught in bad trades and explore counters.
+        elif trade_ratio < 0.85 and composite_score < 0:
+            loss_severity = min(2.0, (1.0 - trade_ratio) + 0.5)
             for u in ALL_16_UNITS:
-                if proportions[u] > 0.15:
-                    current[u] = max(0.3, current[u] - 0.12 * proportions[u])
+                if proportions[u] > 0.12:
+                    current[u] = max(0.25, current[u] - 0.10 * proportions[u] * loss_severity)
 
-            # Mutation & Counter Exploration: Boost less used units to explore new answers
+            # Mutation & Counter Exploration: Boost less used units to find effective answers
             least_used = sorted(ALL_16_UNITS, key=lambda u: proportions[u])[:4]
             for u in least_used:
-                current[u] = min(2.5, current[u] + random.uniform(0.1, 0.25))
+                current[u] = min(2.5, current[u] + random.uniform(0.12, 0.28))
 
-        # Exploration Noise: 15% chance to perturb weights slightly (prevents local optima)
-        if random.random() < 0.20:
+        # 3. Macro Resource Utilization Adjustment:
+        # If spending efficiency was poor (< 0.75, sitting on unspent minerals),
+        # boost quick mineral-dump units (Marines, Hellions) so the bot doesn't float resources
+        if spending_ratio < 0.75 and duration > 300:
+            current["marine"] = min(2.5, current["marine"] + 0.15)
+            current["hellion"] = min(2.2, current["hellion"] + 0.10)
+
+        # 4. Exploration Noise: 15% chance to perturb weights slightly (prevents local optima)
+        if random.random() < 0.15:
             random_unit = random.choice(ALL_16_UNITS)
-            delta = random.choice([-0.1, 0.15, 0.2])
+            delta = random.choice([-0.1, 0.12, 0.18])
             current[random_unit] = round(max(0.2, min(2.8, current[random_unit] + delta)), 3)
 
-        # Normalize so average weight remains around 1.0
+        # 5. Normalize so average weight remains around 1.0
         avg_w = sum(current.values()) / len(current)
         if avg_w > 0:
             for u in current:
@@ -216,3 +246,4 @@ class UnitOptimizer:
 
         self.race_weights[norm_race] = current
         self._save_weights(self.race_weights)
+

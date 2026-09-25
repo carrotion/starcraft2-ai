@@ -32,6 +32,12 @@ class CoachedTerranBot(BotAI):
         self.actual_enemy_race = "DEFAULT"
         self.last_log_time = 0.0
         self.prev_status = ""
+        self.unspent_minerals_samples: List[int] = []
+        self.unspent_vespene_samples: List[int] = []
+        self.last_econ_sample_time: float = 0.0
+        self.last_metrics = None
+        self.last_fitness = None
+
 
 
     def _safe_corner_depots(self) -> List[Point2]:
@@ -209,6 +215,12 @@ class CoachedTerranBot(BotAI):
                     self.actual_enemy_race = self.all_enemy_units.first.race.name
                 elif self.enemy_structures:
                     self.actual_enemy_race = self.enemy_structures.first.race.name
+
+        # Periodic resource sampling for average bank float tracking
+        if self.time - self.last_econ_sample_time >= 5.0:
+            self.last_econ_sample_time = self.time
+            self.unspent_minerals_samples.append(self.minerals)
+            self.unspent_vespene_samples.append(self.vespene)
 
         # 1. Base check
         cc_list = self.townhalls
@@ -1126,20 +1138,38 @@ class CoachedTerranBot(BotAI):
     async def on_end(self, game_result: Result):
         """Called automatically by python-sc2 at match conclusion to trigger reinforcement learning updates."""
         try:
+            from src.sc2_learning.fitness import extract_metrics_from_bot, calculate_fitness
+
             res_str = game_result.name.capitalize() if hasattr(game_result, "name") else str(game_result)
+            metrics = extract_metrics_from_bot(self, game_result, self.time)
+            fitness = calculate_fitness(metrics)
+            self.last_metrics = metrics
+            self.last_fitness = fitness
+
             self.unit_optimizer.update_after_match(
                 enemy_race=self.actual_enemy_race,
                 result=res_str,
                 duration=self.time,
                 units_built=self.units_produced_tracker,
+                fitness_breakdown=fitness,
             )
             self.combat_policy.update_after_match(
                 enemy_race=self.actual_enemy_race,
                 result=res_str,
                 duration=self.time,
+                fitness_breakdown=fitness,
             )
-            print(f"\n[RL 지능형 최적화] {self.actual_enemy_race}전 결과({res_str}) 기반 16종 조합 가중치 & 예술적 전투 마이크로 정책 강화학습 갱신 완료!\n")
+
+            print(
+                f"\n[RL 복합 피트니스 평가] 종합 스코어: {fitness.composite_score:+.1f}점 "
+                f"(결과: {fitness.result_score:+.0f} | "
+                f"교전가성비: {fitness.trade_score:+.1f}[비율 {fitness.trade_ratio:.2f}:1] | "
+                f"자원소모: {fitness.econ_score:+.1f}[소모율 {fitness.spending_ratio*100:.1f}%, 잉여감점 -{fitness.float_penalty:.1f}] | "
+                f"전투마이크로: {fitness.micro_score:+.1f}[피해교환 {fitness.damage_ratio:.2f}:1])"
+            )
+            print(f"[RL 지능형 최적화] {self.actual_enemy_race}전 결과({res_str}) 기반 16종 조합 가중치 & 예술적 전투 마이크로 정책 강화학습 갱신 완료!\n")
         except Exception as e:
             print(f"[RL 가중치 최적화 경고] on_end 가중치 업데이트 오류: {e}")
+
 
 

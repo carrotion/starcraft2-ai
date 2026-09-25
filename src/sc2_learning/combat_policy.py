@@ -105,32 +105,56 @@ class CombatPolicyOptimizer:
             norm_race = "DEFAULT"
         return dict(self.policies[norm_race])
 
-    def update_after_match(self, enemy_race: str, result: str, duration: float):
-        """Reinforces successful micro traits, mutates ineffective parameters on defeat."""
+    def update_after_match(
+        self,
+        enemy_race: str,
+        result: str,
+        duration: float,
+        fitness_breakdown: Any = None,
+    ):
+        """Reinforces successful micro traits, mutates ineffective parameters based on combat trade & damage ratio."""
         norm_race = enemy_race.upper() if enemy_race else "DEFAULT"
         if norm_race not in self.policies:
             norm_race = "DEFAULT"
 
         policy = self.policies[norm_race]
 
-        if result == "Victory":
-            # Victory: consolidate high-skill micro traits
-            policy["focus_fire_rate"] = round(min(0.98, policy["focus_fire_rate"] + 0.02), 3)
-            # Slight random fine-tuning for continuous improvement
-            policy["kiting_distance"] = round(max(2.0, min(4.5, policy["kiting_distance"] + random.uniform(-0.1, 0.1))), 2)
-            policy["retreat_hp_pct"] = round(max(0.15, min(0.40, policy["retreat_hp_pct"] + random.uniform(-0.02, 0.02))), 2)
+        # Parse fitness metrics if provided
+        if fitness_breakdown is not None:
+            if hasattr(fitness_breakdown, "to_dict"):
+                fb = fitness_breakdown.to_dict()
+            elif isinstance(fitness_breakdown, dict):
+                fb = fitness_breakdown
+            else:
+                fb = {}
+        else:
+            fb = {}
 
-        elif result == "Defeat":
-            # Defeat: explore different tactical micro trade-offs
-            # 1. Try stronger or looser focus fire (prevent over-focus overkill)
+        damage_ratio = fb.get("damage_ratio", 1.3 if result == "Victory" else 0.75)
+        trade_ratio = fb.get("trade_ratio", 1.4 if result == "Victory" else 0.7)
+        micro_score = fb.get("micro_score", 10.0 if result == "Victory" else -5.0)
+
+        # 1. Effective Tactical Combat (Good damage exchange & unit preservation)
+        if damage_ratio >= 1.05 or trade_ratio >= 1.05 or micro_score > 5.0:
+            # Consolidate high-skill focus fire and sharp kiting
+            policy["focus_fire_rate"] = round(min(0.98, policy["focus_fire_rate"] + 0.02), 3)
+            # Slight random fine-tuning for continuous refinement
+            policy["kiting_distance"] = round(max(2.0, min(4.5, policy["kiting_distance"] + random.uniform(-0.08, 0.08))), 2)
+            policy["retreat_hp_pct"] = round(max(0.15, min(0.38, policy["retreat_hp_pct"] + random.uniform(-0.015, 0.015))), 2)
+
+        # 2. Ineffective Tactical Combat (Heavy damage taken or poor cost trade)
+        else:
+            # Defeat / poor trade: explore different tactical micro trade-offs
+            # 1. Adjust focus fire (prevent over-focus overkill or lack of focus)
             policy["focus_fire_rate"] = round(max(0.60, min(0.95, policy["focus_fire_rate"] + random.choice([-0.05, 0.04]))), 3)
-            # 2. Adjust kiting spacing
-            policy["kiting_distance"] = round(max(2.2, min(4.4, policy["kiting_distance"] + random.choice([-0.2, 0.25]))), 2)
+            # 2. Adjust kiting spacing to keep safer distance
+            policy["kiting_distance"] = round(max(2.2, min(4.4, policy["kiting_distance"] + random.choice([-0.15, 0.25]))), 2)
             # 3. Adjust stim health margin
-            policy["stim_health_threshold"] = round(max(16.0, min(32.0, policy["stim_health_threshold"] + random.choice([-2.0, 2.0]))), 1)
+            policy["stim_health_threshold"] = round(max(18.0, min(32.0, policy["stim_health_threshold"] + random.choice([-2.0, 2.0]))), 1)
             # 4. Adjust skill sensitivity
             policy["yamato_min_hp"] = round(max(130.0, min(260.0, policy["yamato_min_hp"] + random.choice([-15.0, 15.0]))), 1)
             policy["emp_energy_shield"] = round(max(25.0, min(65.0, policy["emp_energy_shield"] + random.choice([-5.0, 5.0]))), 1)
 
         self.policies[norm_race] = policy
         self._save_policies(self.policies)
+
