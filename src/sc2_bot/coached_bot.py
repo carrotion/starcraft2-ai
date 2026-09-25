@@ -509,49 +509,85 @@ class CoachedTerranBot(BotAI):
                         self.do(worker.build(UnitTypeId.STARPORT, pos), subtract_cost=True, ignore_warning=True)
 
 
-        # 12. Engineering Bay (공학연구소) & Missile Turrets (공중/은폐 방어)
+        # Calculate real-time effective utility weights first
+        effective_weights = self.unit_optimizer.get_effective_weights(
+            enemy_race=self.actual_enemy_race,
+            enemy_units=self.enemy_units,
+            game_time=self.time,
+            minerals=self.minerals,
+            vespene=self.vespene,
+        )
+
+        # Snapshot active forces to make composition-driven, rational tech & upgrade decisions
+        bio_forces = self.units(UnitTypeId.MARINE) | self.units(UnitTypeId.MARAUDER) | self.units(UnitTypeId.REAPER)
+        mech_ground_forces = (
+            self.units(UnitTypeId.SIEGETANK)
+            | self.units(UnitTypeId.SIEGETANKSIEGED)
+            | self.units(UnitTypeId.THOR)
+            | self.units(UnitTypeId.THORAP)
+            | self.units(UnitTypeId.HELLIONTANK)
+            | self.units(UnitTypeId.HELLION)
+            | self.units(UnitTypeId.CYCLONE)
+            | self.units(UnitTypeId.WIDOWMINE)
+            | self.units(UnitTypeId.WIDOWMINEBURROWED)
+        )
+        air_forces = (
+            self.units(UnitTypeId.BATTLECRUISER)
+            | self.units(UnitTypeId.VIKINGFIGHTER)
+            | self.units(UnitTypeId.VIKINGASSAULT)
+            | self.units(UnitTypeId.LIBERATOR)
+            | self.units(UnitTypeId.LIBERATORAG)
+            | self.units(UnitTypeId.BANSHEE)
+            | self.units(UnitTypeId.RAVEN)
+        )
+
+        # 12. Engineering Bay (공학연구소) & Missile Turrets
+        # 건물을 짓는 목적: 바이오닉 병력이 실존하거나(5기+), 공중/은폐 방어용 터렛이 필요할 때만 건설!
         if self.strategy.build_engineering_bay:
             ebay_count = (
                 self.structures(UnitTypeId.ENGINEERINGBAY).amount
                 + self.already_pending(UnitTypeId.ENGINEERINGBAY)
             )
-            if ebay_count < 1 and self.structures(UnitTypeId.BARRACKS).ready and self.can_afford(UnitTypeId.ENGINEERINGBAY):
+            needs_ebay = (len(bio_forces) >= 5 or self.strategy.build_missile_turrets or effective_weights.get("marine", 1.0) >= 0.9)
+            if ebay_count < 1 and needs_ebay and self.structures(UnitTypeId.BARRACKS).ready and self.can_afford(UnitTypeId.ENGINEERINGBAY):
                 pos = await self.find_safe_main_placement(UnitTypeId.ENGINEERINGBAY)
                 if pos:
                     worker = self.select_build_worker(pos)
                     if worker:
                         self.do(worker.build(UnitTypeId.ENGINEERINGBAY, pos), subtract_cost=True, ignore_warning=True)
 
+            # Infantry Upgrades: 바이오닉 병력이 최소 6기 이상 전장에 있을 때만 연구 (순수 메카닉 시 낭비 차단)
+            if len(bio_forces) >= 6:
+                armory_ready = self.structures(UnitTypeId.ARMORY).ready
+                for ebay in self.structures(UnitTypeId.ENGINEERINGBAY).ready.idle:
+                    # Weapons: 1 -> 2 -> 3
+                    if self.strategy.research_weapons:
+                        if self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1):
+                            ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1)
+                            continue
+                        elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2):
+                            ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2)
+                            continue
+                        elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3):
+                            ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3)
+                            continue
 
-            # Infantry Upgrades (공1~3업, 방1~3업, 건물방어)
-            armory_ready = self.structures(UnitTypeId.ARMORY).ready
-            for ebay in self.structures(UnitTypeId.ENGINEERINGBAY).ready.idle:
-                # Weapons: 1 -> 2 -> 3
-                if self.strategy.research_weapons:
-                    if self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1):
-                        ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1)
-                        continue
-                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2):
-                        ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL2)
-                        continue
-                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3):
-                        ebay.research(UpgradeId.TERRANINFANTRYWEAPONSLEVEL3)
-                        continue
+                    # Armors: 1 -> 2 -> 3
+                    if self.strategy.research_armor:
+                        if self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL1):
+                            ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL1)
+                            continue
+                        elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL2):
+                            ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL2)
+                            continue
+                        elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL3):
+                            ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL3)
+                            continue
 
-                # Armors: 1 -> 2 -> 3
-                if self.strategy.research_armor:
-                    if self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL1):
-                        ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL1)
-                        continue
-                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL2) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL2):
-                        ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL2)
-                        continue
-                    elif armory_ready and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYARMORSLEVEL3) == 0 and self.can_afford(UpgradeId.TERRANINFANTRYARMORSLEVEL3):
-                        ebay.research(UpgradeId.TERRANINFANTRYARMORSLEVEL3)
-                        continue
-
-                # Building armor & sensor range
-                if self.minerals > 400 and self.vespene > 200:
+            # Building armor & sensor range (미사일 포탑 2기 이상 구축되고 자원 여유 시)
+            turret_count = self.structures(UnitTypeId.MISSILETURRET).amount
+            if turret_count >= 2 and self.minerals > 500 and self.vespene > 200:
+                for ebay in self.structures(UnitTypeId.ENGINEERINGBAY).ready.idle:
                     if self.already_pending_upgrade(UpgradeId.TERRANBUILDINGARMOR) == 0 and self.can_afford(UpgradeId.TERRANBUILDINGARMOR):
                         ebay.research(UpgradeId.TERRANBUILDINGARMOR)
                     elif self.already_pending_upgrade(UpgradeId.HISECAUTOTRACKING) == 0 and self.can_afford(UpgradeId.HISECAUTOTRACKING):
@@ -559,34 +595,36 @@ class CoachedTerranBot(BotAI):
 
             # Missile Turrets for Air & Cloaked unit defense
             if self.strategy.build_missile_turrets and self.structures(UnitTypeId.ENGINEERINGBAY).ready:
-                turret_count = (
-                    self.structures(UnitTypeId.MISSILETURRET).amount
-                    + self.already_pending(UnitTypeId.MISSILETURRET)
-                )
-                if turret_count < 2 and self.can_afford(UnitTypeId.MISSILETURRET):
-                    if turret_count == 0:
-                        # 1st Turret: Main base mineral line
+                t_amount = turret_count + self.already_pending(UnitTypeId.MISSILETURRET)
+                if t_amount < 2 and self.can_afford(UnitTypeId.MISSILETURRET):
+                    if t_amount == 0:
                         m_pos = main_base.position.towards(self.game_info.map_center, -4)
                         await self.build(UnitTypeId.MISSILETURRET, near=m_pos)
-                    elif turret_count == 1 and other_ccs:
-                        # 2nd Turret: Natural choke
+                    elif t_amount == 1 and other_ccs:
                         nat_cc = other_ccs.first
                         nat_turret_pos = nat_cc.position.towards(self.game_info.map_center, 7)
                         await self.build(UnitTypeId.MISSILETURRET, near=nat_turret_pos)
 
-        # 13. Barracks Tech Lab Research: Stimpack -> Combat Shield -> Concussive Shells
-        for lab in self.structures(UnitTypeId.BARRACKSTECHLAB).ready.idle:
-            if self.strategy.research_stimpack and self.already_pending_upgrade(UpgradeId.STIMPACK) == 0 and self.can_afford(UpgradeId.STIMPACK):
-                lab.research(UpgradeId.STIMPACK)
-            elif self.strategy.research_combat_shield and self.already_pending_upgrade(UpgradeId.SHIELDWALL) == 0 and self.can_afford(UpgradeId.SHIELDWALL):
-                lab.research(UpgradeId.SHIELDWALL)
-            elif self.strategy.research_concussive_shells and self.already_pending_upgrade(UpgradeId.PUNISHERGRENADES) == 0 and self.can_afford(UpgradeId.PUNISHERGRENADES):
-                lab.research(UpgradeId.PUNISHERGRENADES)
+        # 13. Barracks Tech Lab Research: 보병 주력일 때만 스팀팩/방패/충격탄 연구
+        if len(bio_forces) >= 4:
+            for lab in self.structures(UnitTypeId.BARRACKSTECHLAB).ready.idle:
+                if self.strategy.research_stimpack and self.already_pending_upgrade(UpgradeId.STIMPACK) == 0 and self.can_afford(UpgradeId.STIMPACK):
+                    lab.research(UpgradeId.STIMPACK)
+                elif self.strategy.research_combat_shield and self.already_pending_upgrade(UpgradeId.SHIELDWALL) == 0 and self.can_afford(UpgradeId.SHIELDWALL):
+                    lab.research(UpgradeId.SHIELDWALL)
+                elif self.strategy.research_concussive_shells and self.units(UnitTypeId.MARAUDER).amount >= 2 and self.already_pending_upgrade(UpgradeId.PUNISHERGRENADES) == 0 and self.can_afford(UpgradeId.PUNISHERGRENADES):
+                    lab.research(UpgradeId.PUNISHERGRENADES)
 
         # 13-B. Armory (무기고) 건설 및 차량/함선 공방 1~3업 연구
-        if self.strategy.build_armory and self.structures(UnitTypeId.FACTORY).ready:
+        # 무기고 건설 조건: 토르/기갑병 의향이 있거나, 메카닉 병력이 이미 있거나, 보병 2/2업 해금이 필요할 때만 건설!
+        wants_thor = (effective_weights.get("thor", 0.5) >= 0.75 and total_cc >= 2)
+        has_mech = (len(mech_ground_forces) >= 2 or len(air_forces) >= 2)
+        needs_infantry_tier2 = (len(bio_forces) >= 12 and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1) == 1)
+        needs_armory = (wants_thor or has_mech or needs_infantry_tier2)
+
+        if self.strategy.build_armory and self.structures(UnitTypeId.FACTORY).ready and needs_armory:
             armory_count = self.structures(UnitTypeId.ARMORY).amount + self.already_pending(UnitTypeId.ARMORY)
-            if armory_count < (2 if total_cc >= 3 and self.minerals > 600 else 1) and self.can_afford(UnitTypeId.ARMORY):
+            if armory_count < (2 if total_cc >= 3 and self.minerals > 700 else 1) and self.can_afford(UnitTypeId.ARMORY):
                 pos = await self.find_safe_main_placement(UnitTypeId.ARMORY, addon_place=False)
                 if pos:
                     worker = self.select_build_worker(pos)
@@ -594,8 +632,8 @@ class CoachedTerranBot(BotAI):
                         self.do(worker.build(UnitTypeId.ARMORY, pos), subtract_cost=True, ignore_warning=True)
 
             for armory in self.structures(UnitTypeId.ARMORY).ready.idle:
-                # 1. Vehicle Weapons (공성전차, 토르, 화염차, 화염기갑병, 사이클론)
-                if self.strategy.research_mech_weapons:
+                # 1. Vehicle Weapons: 지상 메카닉 병력이 최소 2기 이상 있을 때만 연구
+                if self.strategy.research_mech_weapons and len(mech_ground_forces) >= 2:
                     if self.already_pending_upgrade(UpgradeId.TERRANVEHICLEWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEWEAPONSLEVEL1):
                         armory.research(UpgradeId.TERRANVEHICLEWEAPONSLEVEL1)
                         continue
@@ -606,8 +644,8 @@ class CoachedTerranBot(BotAI):
                         armory.research(UpgradeId.TERRANVEHICLEWEAPONSLEVEL3)
                         continue
 
-                # 2. Vehicle & Ship Plating / Armor (지상 및 공중 공통 장갑)
-                if self.strategy.research_mech_armor:
+                # 2. Vehicle & Ship Plating / Armor: 메카닉/함대 병력이 3기 이상일 때만 연구
+                if self.strategy.research_mech_armor and (len(mech_ground_forces) + len(air_forces)) >= 3:
                     if self.already_pending_upgrade(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL1):
                         armory.research(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL1)
                         continue
@@ -618,8 +656,8 @@ class CoachedTerranBot(BotAI):
                         armory.research(UpgradeId.TERRANVEHICLEANDSHIPARMORSLEVEL3)
                         continue
 
-                # 3. Ship Weapons (전투순양함, 바이킹, 해방선, 밴시)
-                if self.strategy.research_mech_weapons:
+                # 3. Ship Weapons: 공중 유닛이 2기 이상 있을 때만 연구
+                if self.strategy.research_mech_weapons and len(air_forces) >= 2:
                     if self.already_pending_upgrade(UpgradeId.TERRANSHIPWEAPONSLEVEL1) == 0 and self.can_afford(UpgradeId.TERRANSHIPWEAPONSLEVEL1):
                         armory.research(UpgradeId.TERRANSHIPWEAPONSLEVEL1)
                         continue
@@ -631,9 +669,14 @@ class CoachedTerranBot(BotAI):
                         continue
 
         # 13-C. Fusion Core (융합로) 건설 및 야마토포 / 해방선 고급 탄도학 연구
-        if self.strategy.build_fusion_core and self.structures(UnitTypeId.STARPORT).ready and total_cc >= 2:
+        # 융합로 건설 조건: AI가 전투순양함을 실제로 원하거나(배틀 가중치 0.8+), 해방선이 다수 활약 중일 때만 건설! (시간 경과로 짓는 낭비 100% 제거)
+        wants_bc = (effective_weights.get("battlecruiser", 0.5) >= 0.8 and total_cc >= 2)
+        has_many_libs = (self.units(UnitTypeId.LIBERATOR).amount + self.units(UnitTypeId.LIBERATORAG).amount >= 3)
+        needs_fusion_core = (wants_bc or has_many_libs)
+
+        if self.strategy.build_fusion_core and self.structures(UnitTypeId.STARPORT).ready and needs_fusion_core:
             fusion_count = self.structures(UnitTypeId.FUSIONCORE).amount + self.already_pending(UnitTypeId.FUSIONCORE)
-            if fusion_count < 1 and self.can_afford(UnitTypeId.FUSIONCORE) and (self.time > 380 or self.minerals > 550):
+            if fusion_count < 1 and self.can_afford(UnitTypeId.FUSIONCORE):
                 pos = await self.find_safe_main_placement(UnitTypeId.FUSIONCORE, addon_place=False)
                 if pos:
                     worker = self.select_build_worker(pos)
@@ -642,26 +685,20 @@ class CoachedTerranBot(BotAI):
 
         for fc in self.structures(UnitTypeId.FUSIONCORE).ready.idle:
             if self.strategy.research_special_abilities:
-                if self.already_pending_upgrade(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS) == 0 and self.can_afford(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS):
+                # 야마토포는 전투순양함이 최소 1기 이상 존재하거나 건조 중일 때만 연구!
+                has_bc = (self.units(UnitTypeId.BATTLECRUISER).amount + self.already_pending(UnitTypeId.BATTLECRUISER)) >= 1
+                if has_bc and self.already_pending_upgrade(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS) == 0 and self.can_afford(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS):
                     fc.research(UpgradeId.BATTLECRUISERENABLESPECIALIZATIONS)
-                elif self.already_pending_upgrade(UpgradeId.LIBERATORAGRANGEUPGRADE) == 0 and self.can_afford(UpgradeId.LIBERATORAGRANGEUPGRADE):
+                # 해방선 사거리는 해방선이 2기 이상 있을 때만 연구!
+                has_lib = (self.units(UnitTypeId.LIBERATOR).amount + self.units(UnitTypeId.LIBERATORAG).amount) >= 2
+                if has_lib and self.already_pending_upgrade(UpgradeId.LIBERATORAGRANGEUPGRADE) == 0 and self.can_afford(UpgradeId.LIBERATORAGRANGEUPGRADE):
                     fc.research(UpgradeId.LIBERATORAGRANGEUPGRADE)
 
         # 13-D. Ghost Academy (유령사관학교) 건설 및 개인 은폐 연구
-        effective_weights = self.unit_optimizer.get_effective_weights(
-            enemy_race=self.actual_enemy_race,
-            enemy_units=self.enemy_units,
-            game_time=self.time,
-            minerals=self.minerals,
-            vespene=self.vespene,
-        )
+        # 유령사관학교 건설 조건: AI가 유령 생산을 실제로 원할 때만 건설 (적 고위기사/집정관/살모사 등 카운터)
         ghost_w = effective_weights.get("ghost", 0.5)
-        if (
-            self.strategy.build_ghost_academy
-            and self.structures(UnitTypeId.BARRACKS).ready
-            and total_cc >= 2
-            and (ghost_w >= 0.6 or self.minerals > 500)
-        ):
+        wants_ghost = (ghost_w >= 0.8 and total_cc >= 2)
+        if self.strategy.build_ghost_academy and self.structures(UnitTypeId.BARRACKS).ready and wants_ghost:
             academy_count = (
                 self.structures(UnitTypeId.GHOSTACADEMY).amount
                 + self.already_pending(UnitTypeId.GHOSTACADEMY)
@@ -675,22 +712,28 @@ class CoachedTerranBot(BotAI):
 
         for academy in self.structures(UnitTypeId.GHOSTACADEMY).ready.idle:
             if self.strategy.research_special_abilities:
-                if self.already_pending_upgrade(UpgradeId.PERSONALCLOAKING) == 0 and self.can_afford(UpgradeId.PERSONALCLOAKING):
+                # 유령 은폐 연구는 유령이 최소 1기 이상 있거나 훈련 중일 때만 연구!
+                has_ghost = (self.units(UnitTypeId.GHOST).amount + self.already_pending(UnitTypeId.GHOST)) >= 1
+                if has_ghost and self.already_pending_upgrade(UpgradeId.PERSONALCLOAKING) == 0 and self.can_afford(UpgradeId.PERSONALCLOAKING):
                     academy.research(UpgradeId.PERSONALCLOAKING)
 
-        # 13-E. Factory Tech Lab Research (사이클론 가속기, 지뢰 천공발톱, 지옥불 조기점화기)
+        # 13-E. Factory Tech Lab Research: 해당 유닛이 실제로 존재할 때만 특수기술 연구
         if self.strategy.research_special_abilities:
             for flab in self.structures(UnitTypeId.FACTORYTECHLAB).ready.idle:
-                if self.already_pending_upgrade(UpgradeId.HIGHCAPACITYBARRELS) == 0 and self.can_afford(UpgradeId.HIGHCAPACITYBARRELS):
+                # 지옥불: 화염차/화염기갑병 3기 이상
+                if (self.units(UnitTypeId.HELLIONTANK).amount + self.units(UnitTypeId.HELLION).amount) >= 3 and self.already_pending_upgrade(UpgradeId.HIGHCAPACITYBARRELS) == 0 and self.can_afford(UpgradeId.HIGHCAPACITYBARRELS):
                     flab.research(UpgradeId.HIGHCAPACITYBARRELS)
-                elif self.already_pending_upgrade(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE) == 0 and self.can_afford(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE):
+                # 사이클론 락온 가속: 사이클론 2기 이상
+                elif self.units(UnitTypeId.CYCLONE).amount >= 2 and self.already_pending_upgrade(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE) == 0 and self.can_afford(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE):
                     flab.research(UpgradeId.CYCLONELOCKONDAMAGEUPGRADE)
-                elif self.already_pending_upgrade(UpgradeId.DRILLCLAWS) == 0 and self.can_afford(UpgradeId.DRILLCLAWS):
+                # 땅거미 지뢰 천공발톱: 지뢰 2기 이상
+                elif (self.units(UnitTypeId.WIDOWMINE).amount + self.units(UnitTypeId.WIDOWMINEBURROWED).amount) >= 2 and self.already_pending_upgrade(UpgradeId.DRILLCLAWS) == 0 and self.can_afford(UpgradeId.DRILLCLAWS):
                     flab.research(UpgradeId.DRILLCLAWS)
-                elif self.already_pending_upgrade(UpgradeId.SMARTSERVOS) == 0 and self.can_afford(UpgradeId.SMARTSERVOS):
+                # 스마트 서보: 메카닉 대군 5기 이상
+                elif len(mech_ground_forces) >= 5 and self.already_pending_upgrade(UpgradeId.SMARTSERVOS) == 0 and self.can_afford(UpgradeId.SMARTSERVOS):
                     flab.research(UpgradeId.SMARTSERVOS)
 
-        # 13-F. Starport Tech Lab Construction & Research (기술실 및 밴시 은폐/가속 연구)
+        # 13-F. Starport Tech Lab Construction & Research
         for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
             if not starport.has_add_on and self.can_afford(UnitTypeId.STARPORTTECHLAB):
                 addon_slot = starport.position.offset((2.5, -0.5))
@@ -700,12 +743,12 @@ class CoachedTerranBot(BotAI):
 
         if self.strategy.research_special_abilities:
             for slab in self.structures(UnitTypeId.STARPORTTECHLAB).ready.idle:
-                if self.already_pending_upgrade(UpgradeId.BANSHEECLOAK) == 0 and self.can_afford(UpgradeId.BANSHEECLOAK):
+                # 밴시 은폐: 밴시가 최소 1기 이상 있거나 생산 중일 때만 연구!
+                has_banshee = (self.units(UnitTypeId.BANSHEE).amount + self.already_pending(UnitTypeId.BANSHEE)) >= 1
+                if has_banshee and self.already_pending_upgrade(UpgradeId.BANSHEECLOAK) == 0 and self.can_afford(UpgradeId.BANSHEECLOAK):
                     slab.research(UpgradeId.BANSHEECLOAK)
-                elif self.already_pending_upgrade(UpgradeId.BANSHEESPEED) == 0 and self.can_afford(UpgradeId.BANSHEESPEED):
+                elif self.units(UnitTypeId.BANSHEE).amount >= 2 and self.already_pending_upgrade(UpgradeId.BANSHEESPEED) == 0 and self.can_afford(UpgradeId.BANSHEESPEED):
                     slab.research(UpgradeId.BANSHEESPEED)
-
-        # 14. Unit Production (자율 16종 전 유닛 복합 생산 체제)
         # 14. Unit Production (자율 16종 전 유닛 복합 생산 체제 - 하드 제약 철폐 및 유연한 효용 점수화)
         # Helper: Soft Diminishing Utility Function (강제 상한선 없이 비례 샘플링 허용)
         def unit_utility(u_name: str, count: int, scale: float = 0.10) -> float:
