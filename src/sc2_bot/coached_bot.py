@@ -10,7 +10,7 @@ from sc2.ids.ability_id import AbilityId
 from sc2.ids.upgrade_id import UpgradeId
 from sc2.position import Point2
 
-from src.sc2_bot.strategy_guide import StrategyConfig, CURRENT_STRATEGY
+from src.sc2_bot.strategy_guide import StrategyConfig, CURRENT_STRATEGY, get_matchup_strategy
 from src.sc2_bot.micro_controller import TerranMicroController
 from src.sc2_learning.live_telemetry import LiveTelemetry
 from src.sc2_learning.unit_optimizer import UnitOptimizer, ALL_16_UNITS
@@ -30,6 +30,7 @@ class CoachedTerranBot(BotAI):
         self.unit_optimizer = UnitOptimizer()
         self.units_produced_tracker = {u: 0 for u in ALL_16_UNITS}
         self.actual_enemy_race = "DEFAULT"
+        self.matchup_applied = ""
         self.last_log_time = 0.0
         self.prev_status = ""
         self.unspent_minerals_samples: List[int] = []
@@ -38,6 +39,16 @@ class CoachedTerranBot(BotAI):
         self.last_metrics = None
         self.last_fitness = None
         self.unit_stuck_watch: dict[int, tuple[Point2, float]] = {}
+
+        # Reconnaissance & Persistent Fog-of-War Intel
+        self.seen_enemy_structures: set[UnitTypeId] = set()
+        self.seen_enemy_units: set[UnitTypeId] = set()
+        self.last_enemy_structure_seen_time: float = 0.0
+        self.has_scouted_early: bool = False
+        self.scout_tag: Optional[int] = None
+        self.scout_retreating: bool = False
+        self.last_strategic_scan_time: float = 0.0
+        self.scan_count: int = 0
 
 
 
@@ -234,6 +245,34 @@ class CoachedTerranBot(BotAI):
                 elif self.enemy_structures:
                     self.actual_enemy_race = self.enemy_structures.first.race.name
 
+        # Dynamically apply matchup strategy once enemy race is resolved
+        if self.actual_enemy_race != self.matchup_applied:
+            self.matchup_applied = self.actual_enemy_race
+            matchup_strat = get_matchup_strategy(self.actual_enemy_race)
+            self.strategy.matchup = matchup_strat.matchup
+            self.strategy.target_barracks = matchup_strat.target_barracks
+            self.strategy.barracks_techlab_target = matchup_strat.barracks_techlab_target
+            self.strategy.barracks_reactor_target = matchup_strat.barracks_reactor_target
+            self.strategy.target_factories = matchup_strat.target_factories
+            self.strategy.factory_techlab_target = matchup_strat.factory_techlab_target
+            self.strategy.target_starports = matchup_strat.target_starports
+            self.strategy.starport_techlab_target = matchup_strat.starport_techlab_target
+            self.strategy.priority_upgrade = matchup_strat.priority_upgrade
+            self.strategy.ghost_priority = matchup_strat.ghost_priority
+            self.strategy.attack_army_threshold = matchup_strat.attack_army_threshold
+            self.strategy.scan_interval_sec = matchup_strat.scan_interval_sec
+            self.telemetry.log_event(f"종족 맞춤 전술 가동: {matchup_strat.matchup} ({self.actual_enemy_race} 특화 빌드 & 카운터)", "strategy")
+
+        # Persistent Enemy Intelligence Tracker (Fog of War 관통)
+        for s in self.enemy_structures:
+            if s.type_id not in self.seen_enemy_structures:
+                self.seen_enemy_structures.add(s.type_id)
+                self.telemetry.log_event(f"🎯 [적 핵심 테크 감지] {s.type_id.name} 포착! 맞춤 카운터 전략 즉각 가동!", "intel")
+            self.last_enemy_structure_seen_time = self.time
+
+        for u in self.enemy_units:
+            self.seen_enemy_units.add(u.type_id)
+
         # Periodic resource sampling for average bank float tracking
         if self.time - self.last_econ_sample_time >= 5.0:
             self.last_econ_sample_time = self.time
@@ -303,7 +342,35 @@ class CoachedTerranBot(BotAI):
                 target_m = minerals_near.closest_to(idle_scv) if minerals_near else self.mineral_field.closest_to(idle_scv)
                 idle_scv.gather(target_m)
 
+        # Early Physical Scouting (1:30 ~ 3:30): Dispatch SCV scout to enemy base
+        if self.strategy.early_scout and self.enemy_start_locations:
+            if not self.has_scouted_early and 90.0 <= self.time <= 180.0 and len(workers) >= 14:
+                scout_candidate = workers.idle.first if workers.idle else workers.first
+                if scout_candidate:
+                    self.scout_tag = scout_candidate.tag
+                    self.has_scouted_early = True
+                    scout_candidate.move(self.enemy_start_locations[0])
+                    self.telemetry.log_event("📡 [초기 정찰] SCV 정찰대 급파! 적진 진영 및 빌드오더 정찰 출발!", "scout")
 
+            if self.scout_tag:
+                scout_unit = self.workers.find_by_tag(self.scout_tag) or self.units(UnitTypeId.REAPER).find_by_tag(self.scout_tag)
+                if scout_unit:
+                    if (scout_unit.health < scout_unit.health_max * 0.40) or self.time > 230.0:
+                        if not self.scout_retreating:
+                            self.scout_retreating = True
+                            minerals_home = self.mineral_field.closer_than(10, main_base)
+                            if minerals_home:
+                                scout_unit.gather(minerals_home.closest_to(scout_unit))
+                                self.telemetry.log_event("🛡️ [정찰 복귀] 정찰 임무 완수 후 기지로 안전 복귀!", "scout")
+                            else:
+                                scout_unit.move(main_base.position)
+                    elif not self.scout_retreating:
+                        enemy_main_pos = self.enemy_start_locations[0]
+                        enemy_nat_pos = enemy_main_pos.towards(self.game_info.map_center, 12)
+                        if scout_unit.distance_to(enemy_main_pos) < 14:
+                            scout_unit.move(enemy_nat_pos)
+                        elif scout_unit.distance_to(enemy_nat_pos) < 6:
+                            scout_unit.move(enemy_main_pos)
 
         # 3. Orbital Command Morphing & MULE / Scan Deployment (경제력 2배 부스팅)
         if self.strategy.upgrade_orbital and self.structures(UnitTypeId.BARRACKS).ready:
@@ -321,7 +388,22 @@ class CoachedTerranBot(BotAI):
                     oc(AbilityId.SCANNERSWEEP_SCAN, cloaked_threats.first.position)
                     continue
 
-            # 2. MULE deployment: Only when energy reaches 100 (reserving 50 energy for emergency scans)
+                # 2. Strategic Scanner Sweeps (적 테크 및 확장 정찰)
+                if self.strategy.periodic_scan and self.enemy_start_locations and self.time >= 180.0:
+                    time_since_scan = self.time - self.last_strategic_scan_time
+                    time_since_seen_bld = self.time - self.last_enemy_structure_seen_time
+                    if time_since_scan >= self.strategy.scan_interval_sec or (time_since_seen_bld >= 90.0 and self.time >= 240.0):
+                        enemy_main = self.enemy_start_locations[0]
+                        enemy_nat = enemy_main.towards(self.game_info.map_center, 12)
+                        scan_target = enemy_main if (self.scan_count % 2 == 0 or time_since_seen_bld >= 60.0) else enemy_nat
+                        target_name = "본진 테크 거점" if scan_target == enemy_main else "앞마당 확장"
+                        oc(AbilityId.SCANNERSWEEP_SCAN, scan_target)
+                        self.last_strategic_scan_time = self.time
+                        self.scan_count += 1
+                        self.telemetry.log_event(f"📡 [전술 궤도 스캔] 적 {target_name} 정찰 스캔 실시! (누적 {self.scan_count}회)", "scan")
+                        continue
+
+            # 3. MULE deployment: Only when energy reaches 100 (reserving 50 energy for emergency scans)
             if oc.energy >= self.strategy.mule_energy_threshold:
                 minerals = self.mineral_field.closer_than(10, oc)
                 if minerals:
@@ -518,7 +600,7 @@ class CoachedTerranBot(BotAI):
                             worker.build_gas(vespene)
                             break
 
-        # 9. Barracks Addons: 2 Tech Labs (Marauders/Upgrades) + 2 Reactors (Marine Spam)
+        # 9. Barracks Addons: Matchup-driven Tech Labs (Marauders/Upgrades) + Reactors (Marine Spam)
         ready_barracks = self.structures(UnitTypeId.BARRACKS).ready
         tech_lab_count = (
             self.structures(UnitTypeId.BARRACKSTECHLAB).amount
@@ -533,11 +615,13 @@ class CoachedTerranBot(BotAI):
             if not rax.has_add_on:
                 addon_slot = rax.position.offset((2.5, -0.5))
                 if await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_slot):
-                    if tech_lab_count < 2 and self.can_afford(UnitTypeId.BARRACKSTECHLAB):
+                    if tech_lab_count < self.strategy.barracks_techlab_target and self.can_afford(UnitTypeId.BARRACKSTECHLAB):
                         rax.build(UnitTypeId.BARRACKSTECHLAB)
+                        tech_lab_count += 1
                         break
-                    elif reactor_count < 2 and self.can_afford(UnitTypeId.BARRACKSREACTOR):
+                    elif reactor_count < self.strategy.barracks_reactor_target and self.can_afford(UnitTypeId.BARRACKSREACTOR):
                         rax.build(UnitTypeId.BARRACKSREACTOR)
+                        reactor_count += 1
                         break
 
 
@@ -584,13 +668,14 @@ class CoachedTerranBot(BotAI):
                         self.do(worker.build(UnitTypeId.STARPORT, pos), subtract_cost=True, ignore_warning=True)
 
 
-        # Calculate real-time effective utility weights first
+        # Calculate real-time effective utility weights first (with Fog-of-War scouted tech memory)
         effective_weights = self.unit_optimizer.get_effective_weights(
             enemy_race=self.actual_enemy_race,
             enemy_units=self.enemy_units,
             game_time=self.time,
             minerals=self.minerals,
             vespene=self.vespene,
+            seen_enemy_structures=self.seen_enemy_structures,
         )
 
         # Snapshot active forces to make composition-driven, rational tech & upgrade decisions
@@ -668,10 +753,18 @@ class CoachedTerranBot(BotAI):
                     elif self.already_pending_upgrade(UpgradeId.HISECAUTOTRACKING) == 0 and self.can_afford(UpgradeId.HISECAUTOTRACKING):
                         ebay.research(UpgradeId.HISECAUTOTRACKING)
 
-            # Missile Turrets for Air & Cloaked unit defense
-            if self.strategy.build_missile_turrets and self.structures(UnitTypeId.ENGINEERINGBAY).ready:
+            # Missile Turrets for Air & Cloaked unit defense (적 테크 및 종족별 능동 대응)
+            has_air_threat = bool(self.seen_enemy_structures & {
+                UnitTypeId.SPIRE, UnitTypeId.GREATERSPIRE,
+                UnitTypeId.STARGATE, UnitTypeId.FLEETBEACON,
+                UnitTypeId.DARKSHRINE, UnitTypeId.TWILIGHTCOUNCIL,
+                UnitTypeId.STARPORTTECHLAB
+            })
+            needs_turret = self.strategy.build_missile_turrets or has_air_threat
+            if needs_turret and self.structures(UnitTypeId.ENGINEERINGBAY).ready:
+                target_turrets = 3 if (has_air_threat or total_cc >= 2) else 2
                 t_amount = turret_count + self.already_pending(UnitTypeId.MISSILETURRET)
-                if t_amount < 2 and self.can_afford(UnitTypeId.MISSILETURRET):
+                if t_amount < target_turrets and self.can_afford(UnitTypeId.MISSILETURRET):
                     if t_amount == 0:
                         m_pos = main_base.position.towards(self.game_info.map_center, -4)
                         await self.build(UnitTypeId.MISSILETURRET, near=m_pos)
@@ -679,23 +772,43 @@ class CoachedTerranBot(BotAI):
                         nat_cc = other_ccs.first
                         nat_turret_pos = nat_cc.position.towards(self.game_info.map_center, 7)
                         await self.build(UnitTypeId.MISSILETURRET, near=nat_turret_pos)
+                    elif t_amount == 2:
+                        m_pos = main_base.position.towards(self.game_info.map_center, 6)
+                        await self.build(UnitTypeId.MISSILETURRET, near=m_pos)
 
-        # 13. Barracks Tech Lab Research: 보병 주력일 때만 스팀팩/방패/충격탄 연구
+        # 13. Barracks Tech Lab Research: 보병 주력일 때 종족 맞춤형 순차 연구
         if len(bio_forces) >= 4:
             for lab in self.structures(UnitTypeId.BARRACKSTECHLAB).ready.idle:
-                if self.strategy.research_stimpack and self.already_pending_upgrade(UpgradeId.STIMPACK) == 0 and self.can_afford(UpgradeId.STIMPACK):
-                    lab.research(UpgradeId.STIMPACK)
-                elif self.strategy.research_combat_shield and self.already_pending_upgrade(UpgradeId.SHIELDWALL) == 0 and self.can_afford(UpgradeId.SHIELDWALL):
-                    lab.research(UpgradeId.SHIELDWALL)
-                elif self.strategy.research_concussive_shells and self.units(UnitTypeId.MARAUDER).amount >= 2 and self.already_pending_upgrade(UpgradeId.PUNISHERGRENADES) == 0 and self.can_afford(UpgradeId.PUNISHERGRENADES):
-                    lab.research(UpgradeId.PUNISHERGRENADES)
+                if self.strategy.priority_upgrade == "concussive_first":
+                    # 토스전/복합전: 불곰 충격탄 선행 연구 (추적자/광전사 기동력 봉쇄 & 카이팅 극대화)
+                    if self.units(UnitTypeId.MARAUDER).amount >= 1 and self.already_pending_upgrade(UpgradeId.PUNISHERGRENADES) == 0 and self.can_afford(UpgradeId.PUNISHERGRENADES):
+                        lab.research(UpgradeId.PUNISHERGRENADES)
+                        continue
+                    elif self.strategy.research_stimpack and self.already_pending_upgrade(UpgradeId.STIMPACK) == 0 and self.can_afford(UpgradeId.STIMPACK):
+                        lab.research(UpgradeId.STIMPACK)
+                        continue
+                    elif self.strategy.research_combat_shield and self.already_pending_upgrade(UpgradeId.SHIELDWALL) == 0 and self.can_afford(UpgradeId.SHIELDWALL):
+                        lab.research(UpgradeId.SHIELDWALL)
+                        continue
+                else:
+                    # 저그전/테란전: 스팀팩 -> 전투 방패 -> 충격탄 순차 연구
+                    if self.strategy.research_stimpack and self.already_pending_upgrade(UpgradeId.STIMPACK) == 0 and self.can_afford(UpgradeId.STIMPACK):
+                        lab.research(UpgradeId.STIMPACK)
+                        continue
+                    elif self.strategy.research_combat_shield and self.already_pending_upgrade(UpgradeId.SHIELDWALL) == 0 and self.can_afford(UpgradeId.SHIELDWALL):
+                        lab.research(UpgradeId.SHIELDWALL)
+                        continue
+                    elif self.strategy.research_concussive_shells and self.units(UnitTypeId.MARAUDER).amount >= 2 and self.already_pending_upgrade(UpgradeId.PUNISHERGRENADES) == 0 and self.can_afford(UpgradeId.PUNISHERGRENADES):
+                        lab.research(UpgradeId.PUNISHERGRENADES)
+                        continue
 
         # 13-B. Armory (무기고) 건설 및 차량/함선 공방 1~3업 연구
-        # 무기고 건설 조건: 토르/기갑병 의향이 있거나, 메카닉 병력이 이미 있거나, 보병 2/2업 해금이 필요할 때만 건설!
+        # 무기고 건설 조건: 토르/기갑병 의향, 메카닉 병력 실존, 적 공중위협(둥지탑 등), 또는 보병 2/2업 해금
         wants_thor = (effective_weights.get("thor", 0.5) >= 0.75 and total_cc >= 2)
         has_mech = (len(mech_ground_forces) >= 2 or len(air_forces) >= 2)
+        has_air_threat = bool(self.seen_enemy_structures & {UnitTypeId.SPIRE, UnitTypeId.GREATERSPIRE, UnitTypeId.STARGATE})
         needs_infantry_tier2 = (len(bio_forces) >= 12 and self.already_pending_upgrade(UpgradeId.TERRANINFANTRYWEAPONSLEVEL1) == 1)
-        needs_armory = (wants_thor or has_mech or needs_infantry_tier2)
+        needs_armory = (wants_thor or has_mech or has_air_threat or needs_infantry_tier2)
 
         if self.strategy.build_armory and self.structures(UnitTypeId.FACTORY).ready and needs_armory:
             armory_count = self.structures(UnitTypeId.ARMORY).amount + self.already_pending(UnitTypeId.ARMORY)
@@ -770,9 +883,9 @@ class CoachedTerranBot(BotAI):
                     fc.research(UpgradeId.LIBERATORAGRANGEUPGRADE)
 
         # 13-D. Ghost Academy (유령사관학교) 건설 및 개인 은폐 연구
-        # 유령사관학교 건설 조건: AI가 유령 생산을 실제로 원할 때만 건설 (적 고위기사/집정관/살모사 등 카운터)
+        # 유령사관학교 건설 조건: 프로토스전 실드/스톰 카운터(ghost_priority)이거나 AI가 유령을 원할 때 건설
         ghost_w = effective_weights.get("ghost", 0.5)
-        wants_ghost = (ghost_w >= 0.8 and total_cc >= 2)
+        wants_ghost = (ghost_w >= 0.8 and total_cc >= 2) or (self.strategy.ghost_priority and total_cc >= 2 and self.time > 260)
         if self.strategy.build_ghost_academy and self.structures(UnitTypeId.BARRACKS).ready and wants_ghost:
             academy_count = (
                 self.structures(UnitTypeId.GHOSTACADEMY).amount
@@ -1178,12 +1291,21 @@ class CoachedTerranBot(BotAI):
             if hellions: extra_parts.append(f"화염차:{len(hellions)}")
             extra_str = f" | {' '.join(extra_parts)}" if extra_parts else ""
 
+            matchup_tag = f"[{self.strategy.matchup}]" if self.strategy.matchup != "DEFAULT" else f"[{self.actual_enemy_race}]"
+            intel_parts = []
+            if self.scan_count > 0:
+                intel_parts.append(f"스캔:{self.scan_count}회")
+            if self.seen_enemy_structures:
+                tech_names = [s.name for s in list(self.seen_enemy_structures)[:3]]
+                intel_parts.append(f"적테크:{','.join(tech_names)}")
+            intel_str = f" | {' '.join(intel_parts)}" if intel_parts else ""
+
             print(
-                f"[AI 브리핑] [{mins:02d}:{secs:02d}] "
+                f"[AI 브리핑] {matchup_tag} [{mins:02d}:{secs:02d}] "
                 f"기지: {cc_list.amount}개(궤도:{orbital_count}) | 미네랄: {self.minerals} | 가스: {self.vespene} | "
                 f"일꾼: {len(workers)}/{dynamic_worker_cap}(대기:{self.idle_worker_count}) | "
                 f"해병: {len(marines)} | 불곰: {len(marauders)} | 전차: {len(tanks)}(시즈:{len(sieged_tanks)}) | "
-                f"의료선: {len(medivacs)}{extra_str} (군대: {total_combat_army}/{self.strategy.attack_army_threshold}) | {status}"
+                f"의료선: {len(medivacs)}{extra_str}{intel_str} (군대: {total_combat_army}/{self.strategy.attack_army_threshold}) | {status}"
             )
 
         # 17. Live Telemetry Export for Web Dashboard & Radar Broadcast
@@ -1230,6 +1352,9 @@ class CoachedTerranBot(BotAI):
             vikings_count=len(vikings),
             bcs_count=len(battlecruisers),
             idle_workers_count=self.idle_worker_count,
+            matchup=self.strategy.matchup,
+            scans_count=self.scan_count,
+            scouted_tech=[s.name for s in self.seen_enemy_structures],
         )
 
 

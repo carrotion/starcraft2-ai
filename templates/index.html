@@ -310,9 +310,21 @@
         <!-- Strategy Status Text -->
         <div class="bg-blue-950/40 border border-blue-800/40 rounded-xl p-3 flex items-center gap-3">
           <i data-lucide="crosshair" class="w-5 h-5 text-blue-400 shrink-0"></i>
-          <div>
+          <div class="flex-1">
             <div class="text-[10px] text-blue-300 font-semibold uppercase">현재 전술 상태</div>
             <div id="hudStatusText" class="text-xs font-bold text-white">방어선 구축 및 멀티 수급 중</div>
+          </div>
+        </div>
+
+        <!-- Matchup & Scout/Scan HUD Info -->
+        <div class="flex items-center justify-between bg-slate-950/80 border border-slate-800 px-3 py-2 rounded-xl text-xs">
+          <div class="flex items-center gap-2">
+            <span class="text-slate-400 text-[10px]">맞춤 전술:</span>
+            <span id="hudMatchup" class="px-2 py-0.5 rounded font-black text-xs bg-cyan-950 text-cyan-300 border border-cyan-700/50">전술 대기</span>
+          </div>
+          <div class="flex items-center gap-3 text-[11px] text-slate-400">
+            <span>📡 스캔: <b id="hudScansCount" class="text-white">0회</b></span>
+            <span>🎯 적 테크: <b id="hudScoutedTech" class="text-amber-400">정찰 중</b></span>
           </div>
         </div>
       </div>
@@ -793,8 +805,17 @@
           if (document.getElementById('hudThors')) document.getElementById('hudThors').innerText = telemetry.army.thors || 0;
           if (document.getElementById('hudVikings')) document.getElementById('hudVikings').innerText = telemetry.army.vikings || 0;
           if (document.getElementById('hudHellbats')) document.getElementById('hudHellbats').innerText = telemetry.army.hellbats || 0;
-          if (document.getElementById('hudBCs')) document.getElementById('hudBCs').innerText = telemetry.army.battlecruisers || 0;
           document.getElementById('hudStatusText').innerText = telemetry.status || '전투 대기 중';
+          if (document.getElementById('hudMatchup')) {
+            document.getElementById('hudMatchup').innerText = telemetry.matchup || 'DEFAULT';
+          }
+          if (document.getElementById('hudScansCount')) {
+            document.getElementById('hudScansCount').innerText = `${telemetry.scans_count || 0}회`;
+          }
+          if (document.getElementById('hudScoutedTech')) {
+            const techList = telemetry.scouted_tech || [];
+            document.getElementById('hudScoutedTech').innerText = techList.length > 0 ? techList.slice(0, 3).join(', ') : '정찰 중';
+          }
 
           // Caster logs
           if (telemetry.caster_logs && telemetry.caster_logs.length > 0) {

@@ -2,13 +2,13 @@
 
 Combines:
 1. Meta-Learning (RL / Genetic Weight Optimization across matches per enemy race)
-2. In-Game Real-Time Reactive Counter Adaptation (Enemy army observation -> Dynamic weight shift)
+2. In-Game Real-Time Reactive Counter Adaptation (Enemy army observation & Scouted Tech -> Dynamic weight shift)
 """
 
 import os
 import json
 import random
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 WEIGHTS_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -41,6 +41,11 @@ DEFAULT_BASE_WEIGHTS: Dict[str, Dict[str, float]] = {
         "hellion": 0.8, "hellbat": 1.3, "widowmine": 0.9, "cyclone": 0.6, "siegetank": 1.3, "thor": 1.1,
         "viking": 0.7, "medivac": 0.9, "liberator": 0.8, "raven": 0.6, "banshee": 0.7, "battlecruiser": 0.7,
     },
+    "ZERG+PROTOSS": {
+        "marine": 1.1, "reaper": 0.3, "marauder": 1.3, "ghost": 0.9,
+        "hellion": 0.5, "hellbat": 0.9, "widowmine": 0.7, "cyclone": 0.8, "siegetank": 1.3, "thor": 1.1,
+        "viking": 1.2, "medivac": 1.0, "liberator": 0.7, "raven": 0.7, "banshee": 0.5, "battlecruiser": 0.8,
+    },
     "DEFAULT": {
         "marine": 1.2, "reaper": 0.3, "marauder": 1.0, "ghost": 0.6,
         "hellion": 0.5, "hellbat": 0.8, "widowmine": 0.6, "cyclone": 0.7, "siegetank": 1.2, "thor": 0.9,
@@ -57,23 +62,38 @@ class UnitOptimizer:
         os.makedirs(os.path.dirname(self.weights_file), exist_ok=True)
         self.race_weights = self._load_weights()
 
+    def _normalize_race_key(self, enemy_race: str) -> str:
+        """Standardizes race names into dictionary keys."""
+        if not enemy_race:
+            return "DEFAULT"
+        norm = enemy_race.upper()
+        if "ZERG" in norm and "PROTOSS" in norm:
+            return "ZERG+PROTOSS"
+        if "PROTOSS" in norm:
+            return "PROTOSS"
+        if "ZERG" in norm:
+            return "ZERG"
+        if "TERRAN" in norm:
+            return "TERRAN"
+        return "DEFAULT"
+
     def _load_weights(self) -> Dict[str, Dict[str, float]]:
         """Loads weights from persistent JSON or initializes defaults."""
         if os.path.exists(self.weights_file):
             try:
                 with open(self.weights_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    # Validate all units exist
-                    for race in ["TERRAN", "PROTOSS", "ZERG", "DEFAULT"]:
+                    # Validate all expected races and units exist
+                    for race in ["TERRAN", "PROTOSS", "ZERG", "ZERG+PROTOSS", "DEFAULT"]:
                         if race not in data:
                             data[race] = dict(DEFAULT_BASE_WEIGHTS.get(race, DEFAULT_BASE_WEIGHTS["DEFAULT"]))
                         for u in ALL_16_UNITS:
                             if u not in data[race]:
-                                data[race][u] = DEFAULT_BASE_WEIGHTS["DEFAULT"].get(u, 0.5)
+                                data[race][u] = DEFAULT_BASE_WEIGHTS.get(race, DEFAULT_BASE_WEIGHTS["DEFAULT"]).get(u, 0.5)
                     return data
             except Exception:
                 pass
-        
+
         # Deep copy defaults
         init_data = {r: dict(w) for r, w in DEFAULT_BASE_WEIGHTS.items()}
         self._save_weights(init_data)
@@ -96,15 +116,75 @@ class UnitOptimizer:
         game_time: float,
         minerals: int,
         vespene: int,
+        seen_enemy_structures: Optional[Any] = None,
     ) -> Dict[str, float]:
-        """Calculates real-time effective unit utility weights: Base learned weight + real-time counter deltas."""
-        norm_race = enemy_race.upper() if enemy_race else "DEFAULT"
-        if norm_race not in self.race_weights:
-            norm_race = "DEFAULT"
+        """Calculates real-time effective unit utility weights: Base learned weight + scouted tech & observation deltas."""
+        norm_race = self._normalize_race_key(enemy_race)
+        weights = dict(self.race_weights.get(norm_race, self.race_weights["DEFAULT"]))
 
-        weights = dict(self.race_weights[norm_race])
+        # =====================================================================
+        # 1. Predictive Tech-Counter Adjustments based on Scouted Enemy Structures
+        # (Fog of War 관통: 정찰 및 스캔으로 파악한 적 핵심 생산/테크 건물 사전 카운터)
+        # =====================================================================
+        if seen_enemy_structures:
+            struct_names = {getattr(s, "name", str(s)).upper() for s in seen_enemy_structures}
 
-        # Real-time counter adjustments based on observed enemy units
+            # [Zerg Tech Counters]
+            if "SPIRE" in struct_names or "GREATERSPIRE" in struct_names:
+                # 뮤탈리스크/무리군주 등 공중 위협 확정 -> 바이킹/토르 긴급 증산!
+                weights["viking"] += 0.85
+                weights["thor"] += 0.80
+            if "ROACHWARREN" in struct_names or "BANELINGNEST" in struct_names:
+                # 바퀴/맹독충 러시 -> 공성전차 및 화염기갑병/불곰 즉각 보강
+                weights["siegetank"] += 0.75
+                weights["hellbat"] += 0.65
+                weights["marauder"] += 0.50
+            if "HYDRALISKDEN" in struct_names or "LURKERDEN" in struct_names or "LURKERDENMP" in struct_names:
+                # 히드라/잠복 가시지옥 -> 밤까마귀(탐지) 및 공성전차/해방선 필수
+                weights["siegetank"] += 0.70
+                weights["raven"] += 0.85
+                weights["liberator"] += 0.60
+            if "ULTRALISKCAVERN" in struct_names or "HIVE" in struct_names:
+                # 울트라리스크 등 거대괴수 -> 토르/유령/해방선 준비
+                weights["thor"] += 0.75
+                weights["ghost"] += 0.75
+                weights["liberator"] += 0.60
+
+            # [Protoss Tech Counters]
+            if "STARGATE" in struct_names or "FLEETBEACON" in struct_names:
+                # 우주관문 (공허포격기, 예언자, 우주모함) -> 바이킹/사이클론/토르 대공망 가동!
+                weights["viking"] += 0.90
+                weights["cyclone"] += 0.60
+                weights["thor"] += 0.55
+            if "ROBOTICSFACILITY" in struct_names or "ROBOTICSBAY" in struct_names:
+                # 로봇공학시설 (거신, 불멸자) -> 거신 저격용 바이킹 + 추적자/불멸자 파쇄 불곰
+                weights["marauder"] += 0.75
+                weights["viking"] += 0.80
+                weights["siegetank"] += 0.50
+            if "TWILIGHTCOUNCIL" in struct_names or "DARKSHRINE" in struct_names or "TEMPLARARCHIVE" in struct_names:
+                # 암흑기사(은폐) 및 고위기사(사이오닉 폭풍) -> EMP 유령 및 탐지용 밤까마귀
+                weights["ghost"] += 1.00
+                weights["raven"] += 0.85
+
+            # [Terran Tech Counters]
+            if "STARPORT" in struct_names or "STARPORTTECHLAB" in struct_names:
+                # 밴시(은폐) 및 공중 전력 -> 바이킹 및 탐지용 밤까마귀
+                weights["viking"] += 0.70
+                weights["raven"] += 0.85
+            if "FACTORY" in struct_names or "FACTORYTECHLAB" in struct_names:
+                # 테테전 공성전차 라인 배틀 -> 맞공성전차 및 시야용 바이킹/방해매트릭스 밤까마귀
+                weights["siegetank"] += 0.85
+                weights["viking"] += 0.65
+                weights["raven"] += 0.75
+            if "FUSIONCORE" in struct_names:
+                # 전투순양함(야마토포) -> 방해매트릭스 밤까마귀 + 대공 바이킹 집중
+                weights["viking"] += 0.90
+                weights["raven"] += 0.90
+                weights["cyclone"] += 0.50
+
+        # =====================================================================
+        # 2. Real-time Counter Adjustments based on Visible Enemy Army Units
+        # =====================================================================
         if enemy_units:
             flying = [e for e in enemy_units if getattr(e, "is_flying", False) or getattr(e, "type_id", None) and e.type_id.name == "COLOSSUS"]
             light = [e for e in enemy_units if getattr(e, "is_light", False)]
@@ -147,7 +227,9 @@ class UnitOptimizer:
             if len(psionic) >= 2:
                 weights["ghost"] += 0.8
 
-        # 7. Macro Resource State Awareness (Wallet Balancing):
+        # =====================================================================
+        # 3. Macro Resource State Awareness (Wallet Balancing)
+        # =====================================================================
         if vespene > 350 and minerals < 250:
             # Gas surplus & mineral bottleneck -> Heavily prioritize gas tech units and suppress mineral drains!
             weights["siegetank"] += 0.9
@@ -165,7 +247,7 @@ class UnitOptimizer:
             weights["battlecruiser"] += 0.6
             weights["thor"] += 0.5
 
-        # 8. Early-game scout / harassment
+        # 4. Early-game scout / harassment
         if game_time < 240 and weights["reaper"] > 0.4:
             weights["reaper"] += 0.3
 
@@ -184,15 +266,12 @@ class UnitOptimizer:
         fitness_breakdown: Any = None,
     ):
         """Reinforcement Learning update for unit weights based on composite fitness, resource trade ratio, and spending efficiency."""
-        norm_race = enemy_race.upper() if enemy_race else "DEFAULT"
-        if norm_race not in self.race_weights:
-            norm_race = "DEFAULT"
-
-        current = self.race_weights[norm_race]
+        norm_race = self._normalize_race_key(enemy_race)
+        current = self.race_weights.get(norm_race, self.race_weights["DEFAULT"])
         total_built = max(1, sum(units_built.values()))
 
         # Calculate unit production proportions
-        proportions = {u: units_built.get(u, 0) / total_combat_units if (total_combat_units := total_built) else 0.0 for u in ALL_16_UNITS}
+        proportions = {u: units_built.get(u, 0) / total_built for u in ALL_16_UNITS}
 
         # Parse fitness metrics if provided
         if fitness_breakdown is not None:
@@ -209,11 +288,9 @@ class UnitOptimizer:
         trade_ratio = fb.get("trade_ratio", 1.5 if result == "Victory" else 0.7)
         spending_ratio = fb.get("spending_ratio", 0.85)
         vespene_spending_ratio = fb.get("vespene_spending_ratio", 0.70)
-        synergy_score = fb.get("synergy_score", 0.0)
         diversity_score = fb.get("diversity_score", 0.0)
 
         # 1. Balanced Trade & Synergy Reinforcement:
-        # Avoid the "Matthew Effect" (rich-get-richer) where 95% marine spam hogs 100% of the reward!
         if trade_ratio >= 1.05 or composite_score > 15.0:
             trade_multiplier = min(2.5, max(1.0, trade_ratio))
             for u in ALL_16_UNITS:
@@ -231,7 +308,6 @@ class UnitOptimizer:
                 current["thor"] = min(2.5, current["thor"] + 0.15)
 
         # 2. Deficit Trade & Mono-Spam Penalty:
-        # If we suffered losses or had poor diversity / negative synergy, penalize over-used mono units
         if (trade_ratio < 0.85 and composite_score < 0) or diversity_score < -5.0:
             for u in ALL_16_UNITS:
                 if proportions[u] > 0.25:  # Over-relied unit in a losing game
@@ -240,14 +316,12 @@ class UnitOptimizer:
                     current[u] = min(2.5, current[u] + 0.15)
 
         # 3. Gas-Utilization Balancing:
-        # If gas was wasted (vespene_spending_ratio < 0.65 or high gas float), boost gas-heavy units!
         if vespene_spending_ratio < 0.65 or fb.get("float_penalty", 0) > 10.0:
             for gas_unit in ("siegetank", "medivac", "thor", "cyclone", "viking", "raven", "banshee"):
                 current[gas_unit] = min(2.5, current[gas_unit] + 0.14)
             current["marine"] = max(0.4, current["marine"] - 0.12)
 
-        # 4. Intrinsic Curiosity & Anti-Extinction Floor (Quality-Diversity):
-        # Guarantee that under-represented key tech units never extinguish
+        # 4. Intrinsic Curiosity & Anti-Extinction Floor:
         for u in ("siegetank", "medivac", "thor", "viking", "cyclone", "widowmine", "hellbat"):
             if current[u] < 0.65:
                 current[u] = 0.65
@@ -266,4 +340,3 @@ class UnitOptimizer:
 
         self.race_weights[norm_race] = current
         self._save_weights(self.race_weights)
-

@@ -56,6 +56,9 @@ class LiveTelemetry:
         vikings_count: int = 0,
         bcs_count: int = 0,
         idle_workers_count: int = 0,
+        matchup: str = "DEFAULT",
+        scans_count: int = 0,
+        scouted_tech: List[str] = None,
     ):
         """Dumps structured live game observation to disk for websocket streaming."""
         now = time.time()
@@ -71,6 +74,9 @@ class LiveTelemetry:
             "timestamp": now,
             "game_time": game_time,
             "game_time_str": time_str,
+            "matchup": matchup,
+            "scans_count": scans_count,
+            "scouted_tech": scouted_tech or [],
             "resources": {
                 "minerals": minerals,
                 "vespene": vespene,
