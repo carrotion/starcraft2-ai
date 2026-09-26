@@ -253,7 +253,20 @@ class CoachedTerranBot(BotAI):
         ramp_choke = self._safe_ramp_top_center(main_base.position.towards(self.game_info.map_center, 10))
 
         # 2. Worker distribution, dynamic base-scaling capacity, and SCV production
-        await self.distribute_workers()
+        # APM Optimization: Throttle distribute_workers to once every 64 iterations (~3s) to eliminate click spam!
+        # Macro Rebalancing: When gas is heavily floating (>450) and minerals are starved (<150), pull SCVs to minerals!
+        self.iteration = iteration
+        if iteration % 64 == 0:
+            if self.vespene > 450 and self.minerals < 150:
+                for ref in self.gas_buildings.ready:
+                    if ref.assigned_harvesters > 1:
+                        excess_scvs = self.workers.closer_than(3.0, ref)
+                        if excess_scvs:
+                            minerals_near = self.mineral_field.closer_than(10.0, main_base)
+                            if minerals_near:
+                                excess_scvs.first.gather(minerals_near.closest_to(ref))
+            else:
+                await self.distribute_workers()
         workers = self.workers
 
         # Calculate true economic capacity based on active resource nodes:
@@ -811,84 +824,103 @@ class CoachedTerranBot(BotAI):
                     slab.research(UpgradeId.BANSHEECLOAK)
                 elif self.units(UnitTypeId.BANSHEE).amount >= 2 and self.already_pending_upgrade(UpgradeId.BANSHEESPEED) == 0 and self.can_afford(UpgradeId.BANSHEESPEED):
                     slab.research(UpgradeId.BANSHEESPEED)
-        # 14. Unit Production (자율 16종 전 유닛 복합 생산 체제 - 하드 제약 철폐 및 유연한 효용 점수화)
+        # 14. Unit Production (Top-Down Priority Allocation & Resource Reservation)
         # Helper: Soft Diminishing Utility Function (강제 상한선 없이 비례 샘플링 허용)
         def unit_utility(u_name: str, count: int, scale: float = 0.10) -> float:
             base_w = effective_weights.get(u_name, 0.5)
             return round(base_w / (1.0 + count * scale), 4)
 
-        # 14-A. Barracks Production (해병, 사신, 불곰, 유령)
+        # Count active & pending units
         marine_count = self.units(UnitTypeId.MARINE).amount + self.already_pending(UnitTypeId.MARINE)
         reaper_count = self.units(UnitTypeId.REAPER).amount + self.already_pending(UnitTypeId.REAPER)
         marauder_count = self.units(UnitTypeId.MARAUDER).amount + self.already_pending(UnitTypeId.MARAUDER)
         ghost_count = self.units(UnitTypeId.GHOST).amount + self.already_pending(UnitTypeId.GHOST)
         ghost_academy_ready = self.structures(UnitTypeId.GHOSTACADEMY).ready
 
-        for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
-            if self.supply_left < 1:
-                break
-
-            addon_type = None
-            if rax.add_on_tag:
-                addon = self.structures.find_by_tag(rax.add_on_tag)
-                if addon:
-                    addon_type = addon.type_id
-
-            has_techlab = (addon_type == UnitTypeId.BARRACKSTECHLAB)
-            candidates = []
-
-            if has_techlab:
-                if self.strategy.train_ghosts and ghost_academy_ready and self.can_afford(UnitTypeId.GHOST) and self.supply_left >= 2:
-                    candidates.append((unit_utility("ghost", ghost_count, 0.20), UnitTypeId.GHOST, "ghost"))
-                if self.strategy.train_marauders and self.can_afford(UnitTypeId.MARAUDER) and self.vespene >= 25 and self.supply_left >= 2:
-                    candidates.append((unit_utility("marauder", marauder_count, 0.05), UnitTypeId.MARAUDER, "marauder"))
-                if self.strategy.train_reapers and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
-                    candidates.append((unit_utility("reaper", reaper_count, 0.50), UnitTypeId.REAPER, "reaper"))
-                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
-                    candidates.append((unit_utility("marine", marine_count, 0.03), UnitTypeId.MARINE, "marine"))
-            else:
-                if self.strategy.train_reapers and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
-                    candidates.append((unit_utility("reaper", reaper_count, 0.50), UnitTypeId.REAPER, "reaper"))
-                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
-                    candidates.append((unit_utility("marine", marine_count, 0.03), UnitTypeId.MARINE, "marine"))
-
-            if candidates:
-                candidates.sort(key=lambda c: c[0], reverse=True)
-                _, best_type, best_name = candidates[0]
-                rax.train(best_type)
-                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
-                if best_name == "ghost": ghost_count += 1
-                elif best_name == "marauder": marauder_count += 1
-                elif best_name == "reaper": reaper_count += 1
-                elif best_name == "marine": marine_count += 1
-
-        # 14-B. Factory Production (공성전차, 토르, 화염차, 화염기갑병, 사이클론, 땅거미 지뢰)
-        armory_ready = self.structures(UnitTypeId.ARMORY).ready
         thor_count = self.units(UnitTypeId.THOR).amount + self.units(UnitTypeId.THORAP).amount + self.already_pending(UnitTypeId.THOR)
         tank_count = self.units(UnitTypeId.SIEGETANK).amount + self.units(UnitTypeId.SIEGETANKSIEGED).amount + self.already_pending(UnitTypeId.SIEGETANK)
         cyclone_count = self.units(UnitTypeId.CYCLONE).amount + self.already_pending(UnitTypeId.CYCLONE)
         mine_count = self.units(UnitTypeId.WIDOWMINE).amount + self.units(UnitTypeId.WIDOWMINEBURROWED).amount + self.already_pending(UnitTypeId.WIDOWMINE)
         hellbat_count = self.units(UnitTypeId.HELLIONTANK).amount + self.already_pending(UnitTypeId.HELLIONTANK)
         hellion_count = self.units(UnitTypeId.HELLION).amount + self.already_pending(UnitTypeId.HELLION)
+        armory_ready = self.structures(UnitTypeId.ARMORY).ready
 
-        for factory in self.structures(UnitTypeId.FACTORY).ready.idle:
+        bc_count = self.units(UnitTypeId.BATTLECRUISER).amount + self.already_pending(UnitTypeId.BATTLECRUISER)
+        raven_count = self.units(UnitTypeId.RAVEN).amount + self.already_pending(UnitTypeId.RAVEN)
+        banshee_count = self.units(UnitTypeId.BANSHEE).amount + self.already_pending(UnitTypeId.BANSHEE)
+        medivac_count = self.units(UnitTypeId.MEDIVAC).amount + self.already_pending(UnitTypeId.MEDIVAC)
+        viking_count = self.units(UnitTypeId.VIKINGFIGHTER).amount + self.units(UnitTypeId.VIKINGASSAULT).amount + self.already_pending(UnitTypeId.VIKINGFIGHTER)
+        lib_count = self.units(UnitTypeId.LIBERATOR).amount + self.units(UnitTypeId.LIBERATORAG).amount + self.already_pending(UnitTypeId.LIBERATOR)
+        fusion_ready = self.structures(UnitTypeId.FUSIONCORE).ready
+
+        # --- Resource Reservation & Golden Ratio Quotas ---
+        # Bio-Medivac Golden Ratio: 1 Medivac per 8 Marines
+        needs_medivac = (marine_count >= 8 and medivac_count < max(2, marine_count // 8))
+        
+        idle_starports = self.structures(UnitTypeId.STARPORT).ready.idle
+        idle_factories = self.structures(UnitTypeId.FACTORY).ready.idle
+
+        # 14-A. Starport Production (Tier 3 Priority: 의료선, 바이킹, 해방선, 밤까마귀, 밴시, 배틀크루저)
+        for starport in idle_starports:
             if self.supply_left < 2:
                 break
+            addon_type = None
+            if starport.add_on_tag:
+                addon = self.structures.find_by_tag(starport.add_on_tag)
+                if addon: addon_type = addon.type_id
+            has_techlab = (addon_type == UnitTypeId.STARPORTTECHLAB)
+            candidates = []
 
+            # Medivac has top priority if bio ball needs healing!
+            medivac_utility_boost = 1.8 if needs_medivac else 1.0
+            if self.strategy.train_medivacs and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
+                candidates.append((unit_utility("medivac", medivac_count, 0.12) * medivac_utility_boost, UnitTypeId.MEDIVAC, "medivac"))
+            if self.strategy.train_vikings and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
+                candidates.append((unit_utility("viking", viking_count, 0.10), UnitTypeId.VIKINGFIGHTER, "viking"))
+            if self.strategy.train_liberators and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
+                candidates.append((unit_utility("liberator", lib_count, 0.15), UnitTypeId.LIBERATOR, "liberator"))
+
+            if has_techlab:
+                if self.strategy.train_battlecruisers and fusion_ready and self.can_afford(UnitTypeId.BATTLECRUISER) and self.supply_left >= 6:
+                    candidates.append((unit_utility("battlecruiser", bc_count, 0.10), UnitTypeId.BATTLECRUISER, "battlecruiser"))
+                if self.strategy.train_ravens and self.can_afford(UnitTypeId.RAVEN) and self.supply_left >= 3:
+                    candidates.append((unit_utility("raven", raven_count, 0.35), UnitTypeId.RAVEN, "raven"))
+                if self.strategy.train_banshees and self.can_afford(UnitTypeId.BANSHEE) and self.supply_left >= 3:
+                    candidates.append((unit_utility("banshee", banshee_count, 0.15), UnitTypeId.BANSHEE, "banshee"))
+
+            if candidates:
+                candidates.sort(key=lambda c: c[0], reverse=True)
+                _, best_type, best_name = candidates[0]
+                starport.train(best_type)
+                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
+                if best_name == "battlecruiser":
+                    bc_count += 1
+                    self.telemetry.log_event("함대 출격: 전투순양함(Battlecruiser) 건조 착수!", "battlecruiser")
+                elif best_name == "raven": raven_count += 1
+                elif best_name == "banshee": banshee_count += 1
+                elif best_name == "medivac":
+                    medivac_count += 1
+                    needs_medivac = (marine_count >= 8 and medivac_count < max(2, marine_count // 8))
+                elif best_name == "viking": viking_count += 1
+                elif best_name == "liberator": lib_count += 1
+
+        # 14-B. Factory Production (Tier 2 Priority: 공성전차, 토르, 화염차, 화염기갑병, 사이클론, 땅거미 지뢰)
+        for factory in idle_factories:
+            if self.supply_left < 2:
+                break
             addon_type = None
             if factory.add_on_tag:
                 addon = self.structures.find_by_tag(factory.add_on_tag)
-                if addon:
-                    addon_type = addon.type_id
-
+                if addon: addon_type = addon.type_id
             has_techlab = (addon_type == UnitTypeId.FACTORYTECHLAB)
             candidates = []
 
+            # Siege Tanks & Thors are top priority if techlab is ready!
             if has_techlab:
                 if self.strategy.train_thors and armory_ready and self.can_afford(UnitTypeId.THOR) and self.supply_left >= 6:
-                    candidates.append((unit_utility("thor", thor_count, 0.12), UnitTypeId.THOR, "thor"))
+                    candidates.append((unit_utility("thor", thor_count, 0.10) * 1.5, UnitTypeId.THOR, "thor"))
                 if self.strategy.train_siege_tanks and self.can_afford(UnitTypeId.SIEGETANK) and self.supply_left >= 3:
-                    candidates.append((unit_utility("siegetank", tank_count, 0.08), UnitTypeId.SIEGETANK, "siegetank"))
+                    candidates.append((unit_utility("siegetank", tank_count, 0.08) * 1.6, UnitTypeId.SIEGETANK, "siegetank"))
                 if self.strategy.train_cyclones and self.can_afford(UnitTypeId.CYCLONE) and self.supply_left >= 3:
                     candidates.append((unit_utility("cyclone", cyclone_count, 0.10), UnitTypeId.CYCLONE, "cyclone"))
                 if self.strategy.train_widow_mines and self.can_afford(UnitTypeId.WIDOWMINE) and self.supply_left >= 2:
@@ -919,76 +951,49 @@ class CoachedTerranBot(BotAI):
                 elif best_name == "hellbat": hellbat_count += 1
                 elif best_name == "hellion": hellion_count += 1
 
-        # 14-C. Starport Production (전투순양함, 밤까마귀, 밴시, 해방선, 바이킹, 의료선)
-        fusion_ready = self.structures(UnitTypeId.FUSIONCORE).ready
-        bc_count = self.units(UnitTypeId.BATTLECRUISER).amount + self.already_pending(UnitTypeId.BATTLECRUISER)
-        raven_count = self.units(UnitTypeId.RAVEN).amount + self.already_pending(UnitTypeId.RAVEN)
-        banshee_count = self.units(UnitTypeId.BANSHEE).amount + self.already_pending(UnitTypeId.BANSHEE)
-        medivac_count = self.units(UnitTypeId.MEDIVAC).amount + self.already_pending(UnitTypeId.MEDIVAC)
-        viking_count = self.units(UnitTypeId.VIKINGFIGHTER).amount + self.units(UnitTypeId.VIKINGASSAULT).amount + self.already_pending(UnitTypeId.VIKINGFIGHTER)
-        lib_count = self.units(UnitTypeId.LIBERATOR).amount + self.units(UnitTypeId.LIBERATORAG).amount + self.already_pending(UnitTypeId.LIBERATOR)
+        # 14-C. Barracks Production (Tier 1: 해병, 사신, 불곰, 유령 - 가용 미네랄 한도 내 생산)
+        # If Starport desperately needs to build the first medivac, don't let barracks steal the 100 minerals
+        starport_waiting_for_medivac = (needs_medivac and self.structures(UnitTypeId.STARPORT).amount > 0 and medivac_count == 0)
 
-        for starport in self.structures(UnitTypeId.STARPORT).ready.idle:
-            if self.supply_left < 2:
+        for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
+            if self.supply_left < 1:
+                break
+
+            if starport_waiting_for_medivac and self.minerals < 100 and self.vespene >= 100:
                 break
 
             addon_type = None
-            if starport.add_on_tag:
-                addon = self.structures.find_by_tag(starport.add_on_tag)
-                if addon:
-                    addon_type = addon.type_id
+            if rax.add_on_tag:
+                addon = self.structures.find_by_tag(rax.add_on_tag)
+                if addon: addon_type = addon.type_id
 
-            has_techlab = (addon_type == UnitTypeId.STARPORTTECHLAB)
+            has_techlab = (addon_type == UnitTypeId.BARRACKSTECHLAB)
             candidates = []
 
             if has_techlab:
-                if self.strategy.train_battlecruisers and fusion_ready and self.can_afford(UnitTypeId.BATTLECRUISER) and self.supply_left >= 6:
-                    candidates.append((unit_utility("battlecruiser", bc_count, 0.10), UnitTypeId.BATTLECRUISER, "battlecruiser"))
-                if self.strategy.train_ravens and self.can_afford(UnitTypeId.RAVEN) and self.supply_left >= 3:
-                    candidates.append((unit_utility("raven", raven_count, 0.35), UnitTypeId.RAVEN, "raven"))
-                if self.strategy.train_banshees and self.can_afford(UnitTypeId.BANSHEE) and self.supply_left >= 3:
-                    candidates.append((unit_utility("banshee", banshee_count, 0.15), UnitTypeId.BANSHEE, "banshee"))
-                if self.strategy.train_medivacs and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
-                    candidates.append((unit_utility("medivac", medivac_count, 0.18), UnitTypeId.MEDIVAC, "medivac"))
-                if self.strategy.train_vikings and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
-                    candidates.append((unit_utility("viking", viking_count, 0.10), UnitTypeId.VIKINGFIGHTER, "viking"))
-                if self.strategy.train_liberators and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
-                    candidates.append((unit_utility("liberator", lib_count, 0.15), UnitTypeId.LIBERATOR, "liberator"))
+                if self.strategy.train_ghosts and ghost_academy_ready and self.can_afford(UnitTypeId.GHOST) and self.supply_left >= 2:
+                    candidates.append((unit_utility("ghost", ghost_count, 0.20), UnitTypeId.GHOST, "ghost"))
+                if self.strategy.train_marauders and self.can_afford(UnitTypeId.MARAUDER) and self.vespene >= 25 and self.supply_left >= 2:
+                    candidates.append((unit_utility("marauder", marauder_count, 0.05), UnitTypeId.MARAUDER, "marauder"))
+                if self.strategy.train_reapers and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
+                    candidates.append((unit_utility("reaper", reaper_count, 0.50), UnitTypeId.REAPER, "reaper"))
+                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
+                    candidates.append((unit_utility("marine", marine_count, 0.03), UnitTypeId.MARINE, "marine"))
             else:
-                if self.strategy.train_medivacs and self.can_afford(UnitTypeId.MEDIVAC) and self.supply_left >= 2:
-                    candidates.append((unit_utility("medivac", medivac_count, 0.18), UnitTypeId.MEDIVAC, "medivac"))
-                if self.strategy.train_vikings and self.can_afford(UnitTypeId.VIKINGFIGHTER) and self.supply_left >= 2:
-                    candidates.append((unit_utility("viking", viking_count, 0.10), UnitTypeId.VIKINGFIGHTER, "viking"))
-                if self.strategy.train_liberators and self.can_afford(UnitTypeId.LIBERATOR) and self.supply_left >= 3:
-                    candidates.append((unit_utility("liberator", lib_count, 0.15), UnitTypeId.LIBERATOR, "liberator"))
+                if self.strategy.train_reapers and self.can_afford(UnitTypeId.REAPER) and self.supply_left >= 1:
+                    candidates.append((unit_utility("reaper", reaper_count, 0.50), UnitTypeId.REAPER, "reaper"))
+                if self.strategy.train_marines and self.can_afford(UnitTypeId.MARINE) and self.supply_left >= 1:
+                    candidates.append((unit_utility("marine", marine_count, 0.03), UnitTypeId.MARINE, "marine"))
 
             if candidates:
                 candidates.sort(key=lambda c: c[0], reverse=True)
                 _, best_type, best_name = candidates[0]
-                starport.train(best_type)
+                rax.train(best_type)
                 self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
-                if best_name == "battlecruiser":
-                    bc_count += 1
-                    self.telemetry.log_event("함대 출격: 전투순양함(Battlecruiser) 건조 착수!", "battlecruiser")
-                elif best_name == "raven": raven_count += 1
-                elif best_name == "banshee": banshee_count += 1
-                elif best_name == "medivac": medivac_count += 1
-                elif best_name == "viking": viking_count += 1
-                elif best_name == "liberator": lib_count += 1
-
-            if candidates:
-                candidates.sort(key=lambda c: c[0], reverse=True)
-                _, best_type, best_name = candidates[0]
-                starport.train(best_type)
-                self.units_produced_tracker[best_name] = self.units_produced_tracker.get(best_name, 0) + 1
-                if best_name == "battlecruiser":
-                    bc_count += 1
-                    self.telemetry.log_event("함대 출격: 전투순양함(Battlecruiser) 건조 착수!", "battlecruiser")
-                elif best_name == "raven": raven_count += 1
-                elif best_name == "banshee": banshee_count += 1
-                elif best_name == "medivac": medivac_count += 1
-                elif best_name == "viking": viking_count += 1
-                elif best_name == "liberator": lib_count += 1
+                if best_name == "ghost": ghost_count += 1
+                elif best_name == "marauder": marauder_count += 1
+                elif best_name == "reaper": reaper_count += 1
+                elif best_name == "marine": marine_count += 1
 
         # 15. Combat, Defense Anchoring & Micro-Control (제병 협동 전술 - 16종 전 유닛 통합 관제)
         marines = self.units(UnitTypeId.MARINE)

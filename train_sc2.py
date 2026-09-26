@@ -1,4 +1,4 @@
-﻿"""StarCraft II Autonomous Self-Learning & Parallel Multi-Worker Training Runner."""
+"""StarCraft II Autonomous Self-Learning & Parallel Multi-Worker Training Runner."""
 
 import os
 import sys
@@ -15,7 +15,13 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
-os.environ["SC2PATH"] = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
+sc2_p = os.environ.get("SC2PATH")
+if not sc2_p or not os.path.exists(sc2_p):
+    for cand in [r"F:\Game\StarCraft II", r"C:\Games\StarCraft II", r"D:\Games\StarCraft II"]:
+        if os.path.exists(cand):
+            sc2_p = cand
+            break
+os.environ["SC2PATH"] = sc2_p or r"F:\Game\StarCraft II"
 
 from sc2 import maps
 from sc2.data import Difficulty, Race, Result
@@ -74,7 +80,9 @@ def cleanup_zombies():
 
 
 REPLAYS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "replays"))
+VICTORY_REPLAYS_DIR = os.path.join(REPLAYS_DIR, "victories")
 os.makedirs(REPLAYS_DIR, exist_ok=True)
+os.makedirs(VICTORY_REPLAYS_DIR, exist_ok=True)
 
 
 def find_sc2_user_replay_dir() -> str | None:
@@ -203,6 +211,11 @@ def run_worker_game(
         saved_file = ""
         if os.path.exists(replay_path):
             saved_file = replay_file
+            if result_str == "Victory":
+                try:
+                    shutil.copy2(replay_path, os.path.join(VICTORY_REPLAYS_DIR, replay_file))
+                except Exception:
+                    pass
             try:
                 sc2_folder = find_sc2_user_replay_dir()
                 if sc2_folder:
@@ -227,6 +240,11 @@ def run_worker_game(
         saved_file = ""
         if os.path.exists(replay_path):
             saved_file = replay_file
+            if res == "Victory":
+                try:
+                    shutil.copy2(replay_path, os.path.join(VICTORY_REPLAYS_DIR, replay_file))
+                except Exception:
+                    pass
             try:
                 sc2_folder = find_sc2_user_replay_dir()
                 if sc2_folder:

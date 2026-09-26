@@ -1,4 +1,4 @@
-﻿"""FastAPI Web Dashboard Server for StarCraft II Autonomous AI."""
+"""FastAPI Web Dashboard Server for StarCraft II Autonomous AI."""
 
 import os
 import sys
@@ -15,14 +15,22 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 
-os.environ["SC2PATH"] = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
+sc2_p = os.environ.get("SC2PATH")
+if not sc2_p or not os.path.exists(sc2_p):
+    for cand in [r"F:\Game\StarCraft II", r"C:\Games\StarCraft II", r"D:\Games\StarCraft II"]:
+        if os.path.exists(cand):
+            sc2_p = cand
+            break
+os.environ["SC2PATH"] = sc2_p or r"F:\Game\StarCraft II"
 
 from src.sc2_learning.evaluator import AutonomousEvaluator
 from src.sc2_learning.live_telemetry import get_latest_telemetry, get_all_active_workers
 from src.sc2_learning.process_manager import TRAIN_MANAGER
 
 REPLAYS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "replays"))
+VICTORY_REPLAYS_DIR = os.path.join(REPLAYS_DIR, "victories")
 os.makedirs(REPLAYS_DIR, exist_ok=True)
+os.makedirs(VICTORY_REPLAYS_DIR, exist_ok=True)
 
 
 app = FastAPI(title="SC2 AI CommandCenter Dashboard")
@@ -117,6 +125,7 @@ async def list_replays():
     if not os.path.exists(REPLAYS_DIR):
         return {"replays": []}
     files = []
+    victory_files = set(os.listdir(VICTORY_REPLAYS_DIR)) if os.path.exists(VICTORY_REPLAYS_DIR) else set()
     for f in os.listdir(REPLAYS_DIR):
         if f.endswith(".SC2Replay"):
             fp = os.path.join(REPLAYS_DIR, f)
@@ -124,7 +133,8 @@ async def list_replays():
             files.append({
                 "filename": f,
                 "size_kb": round(stat.st_size / 1024, 1),
-                "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+                "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+                "is_victory": f in victory_files,
             })
     files.sort(key=lambda x: x["modified"], reverse=True)
     return {"replays": files}
@@ -133,9 +143,10 @@ async def list_replays():
 @app.get("/api/replays/download/{filename}")
 async def download_replay(filename: str):
     """Downloads a specific .SC2Replay file."""
-    # Sanitize filename
     clean_filename = os.path.basename(filename)
-    fp = os.path.join(REPLAYS_DIR, clean_filename)
+    fp = os.path.join(VICTORY_REPLAYS_DIR, clean_filename)
+    if not os.path.exists(fp):
+        fp = os.path.join(REPLAYS_DIR, clean_filename)
     if not os.path.exists(fp) or not clean_filename.endswith(".SC2Replay"):
         return JSONResponse({"status": "error", "message": "Replay file not found"}, status_code=404)
     return FileResponse(fp, filename=clean_filename, media_type="application/octet-stream")
@@ -145,12 +156,14 @@ async def download_replay(filename: str):
 async def play_replay(filename: str):
     """Directly launches the SC2 client in replay spectator mode."""
     clean_filename = os.path.basename(filename)
-    fp = os.path.abspath(os.path.join(REPLAYS_DIR, clean_filename))
+    fp = os.path.abspath(os.path.join(VICTORY_REPLAYS_DIR, clean_filename))
+    if not os.path.exists(fp):
+        fp = os.path.abspath(os.path.join(REPLAYS_DIR, clean_filename))
     if not os.path.exists(fp):
         return {"status": "error", "message": f"리플레이 파일을 찾을 수 없습니다: {clean_filename}"}
 
     try:
-        sc2_root = os.environ.get("SC2PATH", r"C:\Games\StarCraft II")
+        sc2_root = os.environ.get("SC2PATH", r"F:\Game\StarCraft II")
         switcher_64 = os.path.join(sc2_root, "Support64", "SC2Switcher_x64.exe")
         switcher_32 = os.path.join(sc2_root, "Support", "SC2Switcher.exe")
         if os.path.exists(switcher_64):
@@ -170,7 +183,18 @@ async def open_replays_folder():
     try:
         os.makedirs(REPLAYS_DIR, exist_ok=True)
         subprocess.Popen(f'explorer "{REPLAYS_DIR}"')
-        return {"status": "success", "message": "리플레이 폴더가 열렸습니다."}
+        return {"status": "success", "message": "전체 리플레이 폴더가 열렸습니다."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/replays/open_victories_folder")
+async def open_victories_folder():
+    """Opens the victory replays directory in Windows File Explorer."""
+    try:
+        os.makedirs(VICTORY_REPLAYS_DIR, exist_ok=True)
+        subprocess.Popen(f'explorer "{VICTORY_REPLAYS_DIR}"')
+        return {"status": "success", "message": "승리 리플레이 폴더가 열렸습니다."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

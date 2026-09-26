@@ -121,7 +121,12 @@ def get_latest_telemetry(worker_id: int) -> Dict[str, Any] | None:
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if time.time() - data.get("timestamp", 0) > 6.0:
+                    data["is_stale"] = True
+                else:
+                    data["is_stale"] = False
+                return data
         except Exception:
             pass
     return None

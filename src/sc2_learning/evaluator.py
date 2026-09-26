@@ -18,20 +18,31 @@ class AutonomousEvaluator:
 
     def __init__(self):
         os.makedirs(os.path.dirname(STATS_FILE), exist_ok=True)
-        self.history: List[Dict[str, Any]] = self._load_history()
+        self._last_mtime: float = 0.0
+        self.history: List[Dict[str, Any]] = []
+        self._load_history()
 
     def _load_history(self) -> List[Dict[str, Any]]:
-        records = []
         if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            records.append(json.loads(line))
-                        except Exception:
-                            pass
-        return records
+            try:
+                mtime = os.path.getmtime(STATS_FILE)
+                if hasattr(self, "_last_mtime") and mtime == self._last_mtime and self.history:
+                    return self.history
+                records = []
+                with open(STATS_FILE, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                records.append(json.loads(line))
+                            except Exception:
+                                pass
+                self.history = records
+                self._last_mtime = mtime
+                return records
+            except Exception:
+                pass
+        return self.history
 
     def record_match(
         self,
@@ -86,6 +97,7 @@ class AutonomousEvaluator:
         return self.get_summary()
 
     def get_summary(self) -> Dict[str, Any]:
+        self._load_history()
         total = len(self.history)
         if total == 0:
             return {
@@ -137,17 +149,34 @@ class AutonomousEvaluator:
         norm_race = enemy_race.upper()
 
         spending_ratio = fitness.spending_ratio if fitness else 0.85
+        vespene_spending_ratio = fitness.vespene_spending_ratio if fitness else 0.70
         trade_ratio = fitness.trade_ratio if fitness else (1.5 if last_result == "Victory" else 0.7)
         float_penalty = fitness.float_penalty if fitness else 0.0
+        synergy_score = fitness.synergy_score if fitness else 0.0
+        diversity_score = fitness.diversity_score if fitness else 0.0
 
-        # 1. Economic Spending Optimization (Macro conversion capacity):
-        # If the bot is floating resources (spending_ratio < 0.75 or high float penalty),
-        # expand production capacity (more Barracks/Factories) so minerals don't sit idle.
-        if spending_ratio < 0.75 or float_penalty > 10.0:
-            evolved.target_barracks = min(8, evolved.target_barracks + 1)
-            evolved.target_factories = min(4, evolved.target_factories + 1)
+        # 1. Economic & Tech Conversion Capacity:
+        # If gas is floating (vespene_spending_ratio < 0.65 or gas bottleneck),
+        # expand high-tier production capacity (Factories & Starports) and cool down Barracks spam!
+        if vespene_spending_ratio < 0.65 or float_penalty > 15.0:
+            evolved.target_factories = min(3, max(2, evolved.target_factories + 1))
+            evolved.target_starports = min(2, max(1, evolved.target_starports + 1))
+            evolved.target_barracks = max(4, min(5, evolved.target_barracks - 1))  # Cool down mineral vacuum!
+            evolved.train_siege_tanks = True
+            evolved.train_medivacs = True
+            evolved.train_thors = True
+            evolved.train_vikings = True
             if game_duration > 400:
                 evolved.max_bases = min(4, evolved.max_bases + 1)
+        elif spending_ratio < 0.75:
+            # Mineral surplus -> expand infrastructure
+            evolved.target_barracks = min(6, evolved.target_barracks + 1)
+            evolved.target_factories = min(3, evolved.target_factories + 1)
+
+        # Ensure bio synergy: if bio lacked medivacs, force medivac production
+        if synergy_score < -5.0:
+            evolved.train_medivacs = True
+            evolved.target_starports = max(1, evolved.target_starports)
 
         # 2. Defeat Analysis & Counter-Composition Adaptation
         if last_result == "Defeat":

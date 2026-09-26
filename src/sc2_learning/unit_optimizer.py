@@ -147,8 +147,21 @@ class UnitOptimizer:
             if len(psionic) >= 2:
                 weights["ghost"] += 0.8
 
-        # 7. Late-game Macro Surplus Boost
-        if minerals > 750 and vespene > 400 and game_time > 480:
+        # 7. Macro Resource State Awareness (Wallet Balancing):
+        if vespene > 350 and minerals < 250:
+            # Gas surplus & mineral bottleneck -> Heavily prioritize gas tech units and suppress mineral drains!
+            weights["siegetank"] += 0.9
+            weights["medivac"] += 0.8
+            weights["cyclone"] += 0.6
+            weights["thor"] += 0.6
+            weights["viking"] += 0.5
+            weights["banshee"] += 0.4
+            weights["marine"] = max(0.4, weights["marine"] * 0.6)
+        elif minerals > 650 and vespene < 150:
+            # Mineral surplus & gas shortage -> Dump minerals into marines & hellions
+            weights["marine"] += 0.6
+            weights["hellion"] += 0.5
+        elif minerals > 750 and vespene > 400 and game_time > 480:
             weights["battlecruiser"] += 0.6
             weights["thor"] += 0.5
 
@@ -179,7 +192,7 @@ class UnitOptimizer:
         total_built = max(1, sum(units_built.values()))
 
         # Calculate unit production proportions
-        proportions = {u: units_built.get(u, 0) / total_built for u in ALL_16_UNITS}
+        proportions = {u: units_built.get(u, 0) / total_combat_units if (total_combat_units := total_built) else 0.0 for u in ALL_16_UNITS}
 
         # Parse fitness metrics if provided
         if fitness_breakdown is not None:
@@ -195,50 +208,57 @@ class UnitOptimizer:
         composite_score = fb.get("composite_score", 100.0 if result == "Victory" else -35.0)
         trade_ratio = fb.get("trade_ratio", 1.5 if result == "Victory" else 0.7)
         spending_ratio = fb.get("spending_ratio", 0.85)
+        vespene_spending_ratio = fb.get("vespene_spending_ratio", 0.70)
+        synergy_score = fb.get("synergy_score", 0.0)
+        diversity_score = fb.get("diversity_score", 0.0)
 
-        # 1. Cost-Effective Trade Reinforcement:
-        # If the unit composition achieved a profitable kill/loss exchange (trade_ratio >= 1.05) OR positive fitness,
-        # reinforce the active combat units even if the final result was a late-game loss!
+        # 1. Balanced Trade & Synergy Reinforcement:
+        # Avoid the "Matthew Effect" (rich-get-richer) where 95% marine spam hogs 100% of the reward!
         if trade_ratio >= 1.05 or composite_score > 15.0:
             trade_multiplier = min(2.5, max(1.0, trade_ratio))
             for u in ALL_16_UNITS:
-                if proportions[u] > 0.05:
-                    bonus = 0.14 * proportions[u] * trade_multiplier
+                if proportions[u] > 0.02:
+                    # Capped presence bonus so mono-units cannot monopolize the gradient
+                    bonus = 0.08 * min(0.35, proportions[u] + 0.1) * trade_multiplier
                     current[u] = min(3.0, current[u] + bonus)
+                # Exploration Reward: If team had good synergy/trade, encourage tech units
+                elif u in ("siegetank", "medivac", "thor", "viking", "cyclone", "banshee") and composite_score > 20.0:
+                    current[u] = min(2.5, current[u] + 0.06)
 
-            # Long game tech reinforcement
+            # Long game capital tech reinforcement
             if duration > 600 and composite_score > 30.0:
-                current["battlecruiser"] = min(2.5, current["battlecruiser"] + 0.1)
-                current["thor"] = min(2.5, current["thor"] + 0.1)
+                current["battlecruiser"] = min(2.5, current["battlecruiser"] + 0.15)
+                current["thor"] = min(2.5, current["thor"] + 0.15)
 
-        # 2. Deficit Trade & Ineffective Composition Penalty:
-        # If we suffered heavy resource losses (trade_ratio < 0.85 and composite_score < 0),
-        # penalize over-used units that were caught in bad trades and explore counters.
-        elif trade_ratio < 0.85 and composite_score < 0:
-            loss_severity = min(2.0, (1.0 - trade_ratio) + 0.5)
+        # 2. Deficit Trade & Mono-Spam Penalty:
+        # If we suffered losses or had poor diversity / negative synergy, penalize over-used mono units
+        if (trade_ratio < 0.85 and composite_score < 0) or diversity_score < -5.0:
             for u in ALL_16_UNITS:
-                if proportions[u] > 0.12:
-                    current[u] = max(0.25, current[u] - 0.10 * proportions[u] * loss_severity)
+                if proportions[u] > 0.25:  # Over-relied unit in a losing game
+                    current[u] = max(0.3, current[u] - 0.15)
+                elif u in ("siegetank", "medivac", "thor", "viking", "cyclone", "marauder"):
+                    current[u] = min(2.5, current[u] + 0.15)
 
-            # Mutation & Counter Exploration: Boost less used units to find effective answers
-            least_used = sorted(ALL_16_UNITS, key=lambda u: proportions[u])[:4]
-            for u in least_used:
-                current[u] = min(2.5, current[u] + random.uniform(0.12, 0.28))
+        # 3. Gas-Utilization Balancing:
+        # If gas was wasted (vespene_spending_ratio < 0.65 or high gas float), boost gas-heavy units!
+        if vespene_spending_ratio < 0.65 or fb.get("float_penalty", 0) > 10.0:
+            for gas_unit in ("siegetank", "medivac", "thor", "cyclone", "viking", "raven", "banshee"):
+                current[gas_unit] = min(2.5, current[gas_unit] + 0.14)
+            current["marine"] = max(0.4, current["marine"] - 0.12)
 
-        # 3. Macro Resource Utilization Adjustment:
-        # If spending efficiency was poor (< 0.75, sitting on unspent minerals),
-        # boost quick mineral-dump units (Marines, Hellions) so the bot doesn't float resources
-        if spending_ratio < 0.75 and duration > 300:
-            current["marine"] = min(2.5, current["marine"] + 0.15)
-            current["hellion"] = min(2.2, current["hellion"] + 0.10)
+        # 4. Intrinsic Curiosity & Anti-Extinction Floor (Quality-Diversity):
+        # Guarantee that under-represented key tech units never extinguish
+        for u in ("siegetank", "medivac", "thor", "viking", "cyclone", "widowmine", "hellbat"):
+            if current[u] < 0.65:
+                current[u] = 0.65
 
-        # 4. Exploration Noise: 15% chance to perturb weights slightly (prevents local optima)
+        # 5. Exploration Noise: 15% chance to perturb weights slightly (prevents local optima)
         if random.random() < 0.15:
             random_unit = random.choice(ALL_16_UNITS)
             delta = random.choice([-0.1, 0.12, 0.18])
             current[random_unit] = round(max(0.2, min(2.8, current[random_unit] + delta)), 3)
 
-        # 5. Normalize so average weight remains around 1.0
+        # 6. Normalize so average weight remains around 1.0
         avg_w = sum(current.values()) / len(current)
         if avg_w > 0:
             for u in current:

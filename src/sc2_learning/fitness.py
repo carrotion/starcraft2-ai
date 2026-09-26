@@ -56,10 +56,13 @@ class FitnessBreakdown:
     trade_score: float = 0.0           # Combat cost-exchange score (-50 ~ +100)
     econ_score: float = 0.0            # Economic spending efficiency score (-40 ~ +40)
     micro_score: float = 0.0           # Tactical combat & damage ratio score (-20 ~ +30)
+    synergy_score: float = 0.0         # Composition synergy score (-25 ~ +35)
+    diversity_score: float = 0.0       # Tech & unit diversity score (-25 ~ +30)
 
     # Detailed diagnostic ratios
     trade_ratio: float = 1.0           # killed_value / lost_value
     spending_ratio: float = 0.0        # total_spent / total_collected
+    vespene_spending_ratio: float = 0.0 # spent_vespene / collected_vespene
     damage_ratio: float = 1.0          # damage_dealt / damage_taken
     float_penalty: float = 0.0         # Penalty for sitting on unspent bank
     idle_penalty: float = 0.0          # Penalty for idle production/workers
@@ -109,22 +112,27 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
         trade_score = max(-50.0, -50.0 * (1.0 - trade_ratio))
     trade_score = round(trade_score, 2)
 
-    # 3. Economic Spending Efficiency (자원 소모율 / Spending Quotient)
+    # 3. Economic Spending Efficiency (자원 소모율 & 가스 변환 효율)
     total_collected = max(0, m.collected_minerals + m.collected_vespene)
     total_spent = max(0, m.spent_minerals + m.spent_vespene)
     spending_ratio = round(total_spent / max(1, total_collected), 3)
 
-    # Ideal spending ratio is 85% ~ 98% (reserving minor buffer for sudden production cycles)
-    base_econ = 40.0 * min(1.0, spending_ratio / 0.85)
+    vespene_spending_ratio = round(m.spent_vespene / max(1, m.collected_vespene), 3) if m.collected_vespene > 0 else 1.0
 
-    # Floating Resource Penalty: Sitting on > 600 average unspent minerals is severely penalized
+    # Base econ score incorporates both mineral and vespene spending
+    base_econ = 25.0 * min(1.0, spending_ratio / 0.85) + 15.0 * min(1.0, vespene_spending_ratio / 0.70)
+
+    # Floating Resource Penalty: Sitting on > 500 minerals or > 250 gas is penalized
     float_penalty = 0.0
-    if m.avg_unspent_minerals > 600.0:
-        excess = m.avg_unspent_minerals - 600.0
-        float_penalty = min(35.0, excess / 40.0)
-    if m.avg_unspent_vespene > 400.0:
-        excess_gas = m.avg_unspent_vespene - 400.0
-        float_penalty = min(40.0, float_penalty + excess_gas / 30.0)
+    if m.avg_unspent_minerals > 500.0:
+        excess = m.avg_unspent_minerals - 500.0
+        float_penalty += min(25.0, excess / 40.0)
+    if m.avg_unspent_vespene > 250.0:
+        excess_gas = m.avg_unspent_vespene - 250.0
+        float_penalty += min(35.0, excess_gas / 25.0)
+    # Severe resource bottleneck penalty (gas rotting while starved of minerals)
+    if m.avg_unspent_vespene > 400.0 and m.avg_unspent_minerals < 100.0:
+        float_penalty += 15.0
     float_penalty = round(float_penalty, 2)
 
     # Idle Production & Worker Penalty
@@ -149,8 +157,67 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
         micro_score += heal_bonus
     micro_score = round(micro_score, 2)
 
-    # 5. Composite Multi-Objective Fitness
-    composite = round(result_score + trade_score + econ_score + micro_score, 2)
+    # 5. Composition Synergy Score (제병 협동 및 황금 조합 평가)
+    up = m.units_produced or {}
+    marines = up.get("marine", 0)
+    marauders = up.get("marauder", 0)
+    bio = marines + marauders
+    medivacs = up.get("medivac", 0)
+    tanks = up.get("siegetank", 0)
+    cyclones = up.get("cyclone", 0)
+    thors = up.get("thor", 0)
+    hellbats = up.get("hellbat", 0)
+    hellions = up.get("hellion", 0)
+    mines = up.get("widowmine", 0)
+    mech_ground = tanks + cyclones + thors + hellbats + hellions + mines
+    air = up.get("viking", 0) + up.get("liberator", 0) + up.get("raven", 0) + up.get("banshee", 0) + up.get("battlecruiser", 0)
+
+    synergy_score = 0.0
+    # A. Bio-Medivac Synergy: 1 Medivac per 8 Marines
+    if bio >= 10:
+        target_medivacs = max(1, bio // 8)
+        if medivacs >= 1:
+            ratio = min(1.0, medivacs / target_medivacs)
+            synergy_score += 15.0 * ratio
+        else:
+            # Naked bio penalty: severe penalty for 12+ bio with 0 medivacs
+            synergy_score -= min(15.0, (bio - 8) * 0.5)
+
+    # B. Combined Arms (Siege Support & Mech/Air integration)
+    if m.duration_sec > 250:
+        if tanks >= 1:
+            synergy_score += min(15.0, tanks * 5.0)
+        if mech_ground >= 2:
+            synergy_score += min(10.0, mech_ground * 2.0)
+        if air >= 1:
+            synergy_score += min(10.0, air * 3.5)
+
+    synergy_score = round(max(-25.0, min(35.0, synergy_score)), 2)
+
+    # 6. Tech & Unit Diversity (Quality-Diversity / MAP-Elites)
+    total_combat_units = max(1, sum(up.values()))
+    distinct_types = sum(1 for cnt in up.values() if cnt >= 1)
+    diversity_score = 0.0
+
+    # Diversity reward for fielding multiple unit archetypes
+    if distinct_types >= 3: diversity_score += 5.0
+    if distinct_types >= 4: diversity_score += 8.0
+    if distinct_types >= 6: diversity_score += 12.0
+
+    # Severe penalty for degenerate mono-unit spam (> 85% single unit type)
+    max_single_type_ratio = max((cnt / total_combat_units for cnt in up.values()), default=0.0)
+    if max_single_type_ratio > 0.85 and total_combat_units > 25:
+        diversity_score -= min(25.0, (max_single_type_ratio - 0.85) * 100.0)
+
+    # Tech unlock rewards (Factory / Starport units fielded in battle)
+    if mech_ground >= 1: diversity_score += 5.0
+    if air >= 1 or medivacs >= 1: diversity_score += 5.0
+    if thors >= 1 or up.get("battlecruiser", 0) >= 1: diversity_score += 5.0
+
+    diversity_score = round(max(-25.0, min(30.0, diversity_score)), 2)
+
+    # 7. Composite Multi-Objective Fitness
+    composite = round(result_score + trade_score + econ_score + micro_score + synergy_score + diversity_score, 2)
 
     return FitnessBreakdown(
         composite_score=composite,
@@ -158,8 +225,11 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
         trade_score=trade_score,
         econ_score=econ_score,
         micro_score=micro_score,
+        synergy_score=synergy_score,
+        diversity_score=diversity_score,
         trade_ratio=trade_ratio,
         spending_ratio=spending_ratio,
+        vespene_spending_ratio=vespene_spending_ratio,
         damage_ratio=damage_ratio,
         float_penalty=float_penalty,
         idle_penalty=idle_penalty,
