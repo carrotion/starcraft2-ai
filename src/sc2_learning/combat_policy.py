@@ -133,6 +133,7 @@ class CombatPolicyOptimizer:
         damage_ratio = fb.get("damage_ratio", 1.3 if result == "Victory" else 0.75)
         trade_ratio = fb.get("trade_ratio", 1.4 if result == "Victory" else 0.7)
         micro_score = fb.get("micro_score", 10.0 if result == "Victory" else -5.0)
+        critical_hp_penalty = fb.get("critical_hp_penalty", 0.0)
 
         # 1. Effective Tactical Combat (Good damage exchange & unit preservation)
         if damage_ratio >= 1.05 or trade_ratio >= 1.05 or micro_score > 5.0:
@@ -140,7 +141,7 @@ class CombatPolicyOptimizer:
             policy["focus_fire_rate"] = round(min(0.98, policy["focus_fire_rate"] + 0.02), 3)
             # Slight random fine-tuning for continuous refinement
             policy["kiting_distance"] = round(max(2.0, min(4.5, policy["kiting_distance"] + random.uniform(-0.08, 0.08))), 2)
-            policy["retreat_hp_pct"] = round(max(0.15, min(0.38, policy["retreat_hp_pct"] + random.uniform(-0.015, 0.015))), 2)
+            policy["retreat_hp_pct"] = round(max(0.18, min(0.38, policy["retreat_hp_pct"] + random.uniform(-0.015, 0.015))), 2)
 
         # 2. Ineffective Tactical Combat (Heavy damage taken or poor cost trade)
         else:
@@ -154,6 +155,13 @@ class CombatPolicyOptimizer:
             # 4. Adjust skill sensitivity
             policy["yamato_min_hp"] = round(max(130.0, min(260.0, policy["yamato_min_hp"] + random.choice([-15.0, 15.0]))), 1)
             policy["emp_energy_shield"] = round(max(25.0, min(65.0, policy["emp_energy_shield"] + random.choice([-5.0, 5.0]))), 1)
+
+        # 3. Critical HP Penalty Adaptation (유닛 빈사 감점 발생 시 피 관리 강화)
+        if critical_hp_penalty >= 4.5:
+            # 빈사 유닛이 너무 많이 발생함 -> 유닛 후방 빼기(살리기) 기준 체력을 높이고 안전 거리 확보!
+            policy["retreat_hp_pct"] = round(min(0.40, policy["retreat_hp_pct"] + 0.03), 2)
+            policy["kiting_distance"] = round(min(4.5, policy["kiting_distance"] + 0.15), 2)
+            policy["stim_health_threshold"] = round(min(32.0, policy["stim_health_threshold"] + 2.0), 1)
 
         self.policies[norm_race] = policy
         self._save_policies(self.policies)

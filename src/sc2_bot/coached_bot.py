@@ -50,6 +50,13 @@ class CoachedTerranBot(BotAI):
         self.last_strategic_scan_time: float = 0.0
         self.scan_count: int = 0
 
+        # Health Preservation & Critical HP Monitoring (유닛 피 관리)
+        self.critical_hp_incidents: int = 0
+        self.units_saved_from_critical: int = 0
+        self.critical_unit_tags: set[int] = set()
+        self.army_hp_pct_samples: List[float] = []
+        self.last_hp_sample_time: float = 0.0
+
 
 
     def _safe_corner_depots(self) -> List[Point2]:
@@ -272,6 +279,29 @@ class CoachedTerranBot(BotAI):
 
         for u in self.enemy_units:
             self.seen_enemy_units.add(u.type_id)
+
+        # Health Preservation & Critical HP Monitoring (유닛 피 관리 & 빈사 상태 감점 추적)
+        if self.time - self.last_hp_sample_time >= 1.0:
+            self.last_hp_sample_time = self.time
+            combat_units = self.units.filter(
+                lambda u: (u.can_attack_ground or u.can_attack_air) and u.type_id not in {UnitTypeId.SCV, UnitTypeId.MULE}
+            )
+            if combat_units:
+                hp_ratios = [u.health / u.health_max for u in combat_units]
+                avg_hp = sum(hp_ratios) / len(hp_ratios)
+                self.army_hp_pct_samples.append(avg_hp)
+
+                for u in combat_units:
+                    ratio = u.health / u.health_max
+                    if ratio <= 0.35:
+                        if u.tag not in self.critical_unit_tags:
+                            self.critical_unit_tags.add(u.tag)
+                            self.critical_hp_incidents += 1
+                    elif ratio >= 0.70 and u.tag in self.critical_unit_tags:
+                        # Unit was healed/repaired back to safety!
+                        self.critical_unit_tags.remove(u.tag)
+                        self.units_saved_from_critical += 1
+                        self.telemetry.log_event(f"🚑 [체력 회복] 빈사 유닛({u.type_id.name}) 완치되어 전선 복귀!", "heal")
 
         # Periodic resource sampling for average bank float tracking
         if self.time - self.last_econ_sample_time >= 5.0:
@@ -1387,6 +1417,7 @@ class CoachedTerranBot(BotAI):
                 f"\n[RL 복합 피트니스 평가] 종합 스코어: {fitness.composite_score:+.1f}점 "
                 f"(결과: {fitness.result_score:+.0f} | "
                 f"교전가성비: {fitness.trade_score:+.1f}[비율 {fitness.trade_ratio:.2f}:1] | "
+                f"피관리: {fitness.hp_preservation_score - fitness.critical_hp_penalty:+.1f}[빈사감점 -{fitness.critical_hp_penalty:.1f}, 구조회복 +{fitness.units_saved_from_critical * 2}] | "
                 f"자원소모: {fitness.econ_score:+.1f}[소모율 {fitness.spending_ratio*100:.1f}%, 잉여감점 -{fitness.float_penalty:.1f}] | "
                 f"전투마이크로: {fitness.micro_score:+.1f}[피해교환 {fitness.damage_ratio:.2f}:1])"
             )
