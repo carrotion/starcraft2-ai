@@ -321,18 +321,29 @@ class UnitOptimizer:
                 current[gas_unit] = min(2.5, current[gas_unit] + 0.14)
             current["marine"] = max(0.4, current["marine"] - 0.12)
 
-        # 4. Intrinsic Curiosity & Anti-Extinction Floor:
+        # 4. Unit Health Preservation & Durability Reinforcement:
+        hp_penalty = fb.get("hp_preservation_penalty", 0.0)
+        hp_recovery = fb.get("hp_recovery_bonus", 0.0)
+        if hp_penalty >= 8.0:
+            # High red-line casualties -> prioritize Medivacs for triage healing and Marauders for durable frontline buffer
+            current["medivac"] = min(2.5, current["medivac"] + 0.15)
+            current["marauder"] = min(2.5, current["marauder"] + 0.12)
+        elif hp_recovery >= 5.0:
+            # Effective field triage & rescue observed -> reward and maintain medivac support
+            current["medivac"] = min(2.5, current["medivac"] + 0.08)
+
+        # 5. Intrinsic Curiosity & Anti-Extinction Floor:
         for u in ("siegetank", "medivac", "thor", "viking", "cyclone", "widowmine", "hellbat"):
             if current[u] < 0.65:
                 current[u] = 0.65
 
-        # 5. Exploration Noise: 15% chance to perturb weights slightly (prevents local optima)
+        # 6. Exploration Noise: 15% chance to perturb weights slightly (prevents local optima)
         if random.random() < 0.15:
             random_unit = random.choice(ALL_16_UNITS)
             delta = random.choice([-0.1, 0.12, 0.18])
             current[random_unit] = round(max(0.2, min(2.8, current[random_unit] + delta)), 3)
 
-        # 6. Normalize so average weight remains around 1.0
+        # 7. Normalize so average weight remains around 1.0
         avg_w = sum(current.values()) / len(current)
         if avg_w > 0:
             for u in current:

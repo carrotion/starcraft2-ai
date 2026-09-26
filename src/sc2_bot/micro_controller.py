@@ -55,7 +55,12 @@ class TerranMicroController:
             if nearby_enemies:
                 # 0. Low HP Tactical Retreat (프로게이머의 빈사 유닛 살리기 무빙)
                 if (unit.health / unit.health_max) <= retreat_pct:
-                    retreat_pos = unit.position.towards(base_pos, 3.0)
+                    medivacs = getattr(self.bot, "units", None)
+                    close_medivacs = medivacs(UnitTypeId.MEDIVAC).closer_than(12.0, unit) if medivacs else None
+                    if close_medivacs:
+                        retreat_pos = unit.position.towards(close_medivacs.closest_to(unit).position, 3.0)
+                    else:
+                        retreat_pos = unit.position.towards(base_pos, 3.0)
                     unit.move(retreat_pos)
                     continue
 

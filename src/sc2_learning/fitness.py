@@ -44,10 +44,11 @@ class MatchMetrics:
     total_damage_taken: float = 0.0
     total_healed: float = 0.0
 
-    # Health preservation & Critical HP metrics (유닛 피 관리 및 빈사 상태 지표)
-    critical_hp_incidents: int = 0      # 체력 35% 이하 빈사 상태 도달 사건 수
-    avg_army_hp_pct: float = 1.0        # 전투 병력의 평균 체력 유지율 (0.0 ~ 1.0)
-    units_saved_from_critical: int = 0  # 빈사 상태에서 치료/수리받아 회복된 유닛 수
+    # Combat Health Preservation & Critical HP tracking
+    critical_hp_events: int = 0
+    critical_hp_units_saved: int = 0
+    critical_hp_units_lost: int = 0
+    hp_preservation_ratio: float = 1.0
 
     # Composition
     units_produced: Dict[str, int] = field(default_factory=dict)
@@ -63,8 +64,7 @@ class FitnessBreakdown:
     micro_score: float = 0.0           # Tactical combat & damage ratio score (-20 ~ +30)
     synergy_score: float = 0.0         # Composition synergy score (-25 ~ +35)
     diversity_score: float = 0.0       # Tech & unit diversity score (-25 ~ +30)
-    critical_hp_penalty: float = 0.0   # 빈사 체력(<35%) 노출 감점 (-0 ~ -25)
-    hp_preservation_score: float = 0.0 # 평균 체력 보존 및 회복 가산점 (-15 ~ +15)
+    hp_preservation_score: float = 0.0 # Net score for HP preservation & saving wounded (-25 ~ +25)
 
     # Detailed diagnostic ratios
     trade_ratio: float = 1.0           # killed_value / lost_value
@@ -73,8 +73,8 @@ class FitnessBreakdown:
     damage_ratio: float = 1.0          # damage_dealt / damage_taken
     float_penalty: float = 0.0         # Penalty for sitting on unspent bank
     idle_penalty: float = 0.0          # Penalty for idle production/workers
-    avg_army_hp_pct: float = 1.0       # Average army HP percentage
-    units_saved_from_critical: int = 0 # Count of units recovered from red HP
+    hp_preservation_penalty: float = 0.0 # Penalty for unmitigated critical HP deaths
+    hp_recovery_bonus: float = 0.0     # Bonus for saving & healing critical HP units
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -156,36 +156,39 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
     damage_ratio = round(dmg_dealt / dmg_taken, 3)
 
     if damage_ratio >= 1.0:
-        base_micro = min(25.0, 20.0 * (damage_ratio - 1.0))
+        micro_score = min(25.0, 20.0 * (damage_ratio - 1.0))
     else:
-        base_micro = max(-20.0, -20.0 * (1.0 - damage_ratio))
+        micro_score = max(-20.0, -20.0 * (1.0 - damage_ratio))
 
     # Medivac / repair support bonus
-    heal_bonus = 0.0
     if m.total_healed > 0:
         heal_bonus = min(10.0, m.total_healed / 250.0)
+        micro_score += heal_bonus
+    micro_score = round(micro_score, 2)
 
-    # [유닛 피 관리 반영] 체력 35% 이하 빈사 상태 도달 감점 (Critical HP Penalty)
-    # 전투 유닛의 체력이 위험 수준으로 떨어지면 생존 위기 및 컨트롤 미흡으로 판단하여 감점
-    critical_hp_penalty = 0.0
-    if m.critical_hp_incidents > 0:
-        # 빈사 발생 건당 -1.5점 감점 (최대 -25.0점 감점)
-        critical_hp_penalty = min(25.0, float(m.critical_hp_incidents) * 1.5)
-    critical_hp_penalty = round(critical_hp_penalty, 2)
+    # 4-B. Combat Unit Health Preservation & Critical HP Recovery (체력 보존 및 빈사 유닛 살리기 평가)
+    # 1) Penalty for letting units drop into critical red-line HP (<= 35%) and dying recklessly without retreat/healing
+    hp_preservation_penalty = 0.0
+    if m.critical_hp_units_lost > 0:
+        # Penalize -1.5 points per lost critical unit, capped at -25.0
+        hp_preservation_penalty = min(25.0, m.critical_hp_units_lost * 1.5)
 
-    hp_preservation_score = 0.0
-    # 평균 체력 잔여율: 75% 이상 높게 유지 시 가산점, 50% 미만 방치 시 추가 감점
-    if m.avg_army_hp_pct >= 0.75:
-        hp_preservation_score += min(10.0, (m.avg_army_hp_pct - 0.75) * 40.0)
-    elif m.avg_army_hp_pct < 0.50:
-        hp_preservation_score -= min(10.0, (0.50 - m.avg_army_hp_pct) * 30.0)
+    # 2) Bonus for pro-level preservation: pulling back wounded units and healing them back to safe HP
+    hp_recovery_bonus = 0.0
+    if m.critical_hp_units_saved > 0:
+        # Reward +2.0 points per unit saved from the brink of death, capped at +20.0
+        hp_recovery_bonus = min(20.0, m.critical_hp_units_saved * 2.0)
 
-    # 빈사 상태(<35%) 유닛을 의료선 치료나 SCV 수리로 살려낸 경우 보존 회복 가산점 (+2점/기, 최대 +8점)
-    if m.units_saved_from_critical > 0:
-        hp_preservation_score += min(8.0, float(m.units_saved_from_critical) * 2.0)
-    hp_preservation_score = round(hp_preservation_score, 2)
+    # 3) Surviving army health preservation bonus (end-of-game healthy army preservation)
+    health_ratio_bonus = 0.0
+    if m.hp_preservation_ratio >= 0.75 and m.duration_sec > 180:
+        health_ratio_bonus = 5.0
+    elif m.hp_preservation_ratio < 0.40 and m.duration_sec > 180:
+        hp_preservation_penalty += 5.0
 
-    micro_score = round(base_micro + heal_bonus - critical_hp_penalty + hp_preservation_score, 2)
+    hp_preservation_penalty = round(hp_preservation_penalty, 2)
+    hp_recovery_bonus = round(hp_recovery_bonus, 2)
+    hp_preservation_score = round(hp_recovery_bonus + health_ratio_bonus - hp_preservation_penalty, 2)
 
     # 5. Composition Synergy Score (제병 협동 및 황금 조합 평가)
     up = m.units_produced or {}
@@ -247,7 +250,7 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
     diversity_score = round(max(-25.0, min(30.0, diversity_score)), 2)
 
     # 7. Composite Multi-Objective Fitness
-    composite = round(result_score + trade_score + econ_score + micro_score + synergy_score + diversity_score, 2)
+    composite = round(result_score + trade_score + econ_score + micro_score + synergy_score + diversity_score + hp_preservation_score, 2)
 
     return FitnessBreakdown(
         composite_score=composite,
@@ -257,7 +260,6 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
         micro_score=micro_score,
         synergy_score=synergy_score,
         diversity_score=diversity_score,
-        critical_hp_penalty=critical_hp_penalty,
         hp_preservation_score=hp_preservation_score,
         trade_ratio=trade_ratio,
         spending_ratio=spending_ratio,
@@ -265,8 +267,8 @@ def calculate_fitness(m: MatchMetrics) -> FitnessBreakdown:
         damage_ratio=damage_ratio,
         float_penalty=float_penalty,
         idle_penalty=idle_penalty,
-        avg_army_hp_pct=m.avg_army_hp_pct,
-        units_saved_from_critical=m.units_saved_from_critical,
+        hp_preservation_penalty=hp_preservation_penalty,
+        hp_recovery_bonus=hp_recovery_bonus,
     )
 
 
@@ -334,13 +336,19 @@ def extract_metrics_from_bot(bot: Any, game_result: Any, duration_sec: float) ->
         except Exception:
             pass
 
-    # Extract health preservation & critical HP metrics from bot runtime
-    metrics.critical_hp_incidents = int(getattr(bot, "critical_hp_incidents", 0))
-    metrics.units_saved_from_critical = int(getattr(bot, "units_saved_from_critical", 0))
-    hp_samples = getattr(bot, "army_hp_pct_samples", [])
-    if hp_samples:
-        metrics.avg_army_hp_pct = round(sum(hp_samples) / len(hp_samples), 3)
-    else:
-        metrics.avg_army_hp_pct = 1.0
+    # Combat Health Preservation metrics from bot
+    metrics.critical_hp_events = int(getattr(bot, "critical_hp_events", 0))
+    metrics.critical_hp_units_saved = int(getattr(bot, "critical_hp_units_saved", 0))
+    metrics.critical_hp_units_lost = int(getattr(bot, "critical_hp_units_lost", 0))
+
+    try:
+        if hasattr(bot, "units"):
+            combat_units = bot.units.filter(lambda u: (u.can_attack_ground or u.can_attack_air) and getattr(u, "type_id", None) and u.type_id.name not in ("SCV", "MULE"))
+            if combat_units:
+                total_hp = sum(u.health for u in combat_units)
+                total_max_hp = sum(u.health_max for u in combat_units)
+                metrics.hp_preservation_ratio = round(total_hp / max(1.0, total_max_hp), 3)
+    except Exception:
+        pass
 
     return metrics

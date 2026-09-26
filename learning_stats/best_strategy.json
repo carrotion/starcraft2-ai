@@ -8,7 +8,7 @@
   "bunker_at_natural": true,
   "build_missile_turrets": true,
   "build_refinery": true,
-  "target_barracks": 8,
+  "target_barracks": 4,
   "build_factory": true,
   "target_factories": 3,
   "build_starport": true,
@@ -25,7 +25,7 @@
   "research_mech_weapons": true,
   "research_mech_armor": true,
   "research_special_abilities": true,
-  "composition_focus": "mech_heavy",
+  "composition_focus": "adaptive",
   "train_marines": true,
   "train_reapers": true,
   "train_marauders": true,
@@ -42,6 +42,6 @@
   "train_ravens": true,
   "train_banshees": true,
   "train_battlecruisers": true,
-  "attack_army_threshold": 36,
+  "attack_army_threshold": 38,
   "defend_base_on_attack": true
 }
