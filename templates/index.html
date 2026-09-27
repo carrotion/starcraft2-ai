@@ -343,6 +343,160 @@
     </div>
   </div>
 
+  <!-- 9-Matrix Phase Evaluation & Opponent Benchmarking Section -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+
+    <!-- Left: 9-Matrix Scorecard (3 Races x 3 Phases) & Race Win Rates -->
+    <div class="lg:col-span-7 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col">
+      <div class="flex items-center justify-between mb-4 pb-2 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <i data-lucide="grid" class="w-5 h-5 text-cyan-400"></i>
+          <h3 class="font-bold text-sm tracking-wider uppercase text-white font-sc2">
+            9대 국면 평가 매트릭스 <span class="text-xs text-slate-400 normal-case font-normal">(상대 종족 3종 × 초·중·종 3단계)</span>
+          </h3>
+        </div>
+        <span class="text-xs text-cyan-400 font-mono">가중 복합 채점</span>
+      </div>
+
+      <!-- Race Win Rates Cards Banner -->
+      <div class="grid grid-cols-3 gap-3 mb-4">
+        <!-- Terran -->
+        <div class="bg-slate-950/80 border border-blue-500/30 rounded-xl p-3 flex flex-col">
+          <div class="flex items-center justify-between text-[11px] text-blue-400 font-bold mb-1">
+            <span>테란전 (TvT)</span>
+            <span id="wrBadgeTerran" class="px-1.5 py-0.2 rounded text-[10px] bg-blue-950 text-blue-300 border border-blue-500/30 font-mono">0.0%</span>
+          </div>
+          <div class="flex items-baseline justify-between mt-1">
+            <span id="wrRecordTerran" class="text-xs font-mono text-slate-300">0승 0패</span>
+            <span id="wrScoreTerran" class="text-xs font-sc2 font-bold text-blue-400">평점: --</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+            <div id="wrBarTerran" class="bg-blue-500 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Protoss -->
+        <div class="bg-slate-950/80 border border-amber-500/30 rounded-xl p-3 flex flex-col">
+          <div class="flex items-center justify-between text-[11px] text-amber-400 font-bold mb-1">
+            <span>토스전 (TvP)</span>
+            <span id="wrBadgeProtoss" class="px-1.5 py-0.2 rounded text-[10px] bg-amber-950 text-amber-300 border border-amber-500/30 font-mono">0.0%</span>
+          </div>
+          <div class="flex items-baseline justify-between mt-1">
+            <span id="wrRecordProtoss" class="text-xs font-mono text-slate-300">0승 0패</span>
+            <span id="wrScoreProtoss" class="text-xs font-sc2 font-bold text-amber-400">평점: --</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+            <div id="wrBarProtoss" class="bg-amber-500 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- Zerg -->
+        <div class="bg-slate-950/80 border border-purple-500/30 rounded-xl p-3 flex flex-col">
+          <div class="flex items-center justify-between text-[11px] text-purple-400 font-bold mb-1">
+            <span>저그전 (TvZ)</span>
+            <span id="wrBadgeZerg" class="px-1.5 py-0.2 rounded text-[10px] bg-purple-950 text-purple-300 border border-purple-500/30 font-mono">0.0%</span>
+          </div>
+          <div class="flex items-baseline justify-between mt-1">
+            <span id="wrRecordZerg" class="text-xs font-mono text-slate-300">0승 0패</span>
+            <span id="wrScoreZerg" class="text-xs font-sc2 font-bold text-purple-400">평점: --</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+            <div id="wrBarZerg" class="bg-purple-500 h-full rounded-full transition-all duration-500" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 9-Matrix Table -->
+      <div class="overflow-x-auto flex-1">
+        <table class="w-full text-center text-xs">
+          <thead class="text-slate-400 uppercase bg-slate-950/60 border-b border-slate-800">
+            <tr>
+              <th class="py-2.5 px-3 text-left">상대 종족</th>
+              <th class="py-2.5 px-3">초반 (0~4분)</th>
+              <th class="py-2.5 px-3">중반 (4~9분)</th>
+              <th class="py-2.5 px-3">종반 (9분+)</th>
+              <th class="py-2.5 px-3">종족 평균</th>
+            </tr>
+          </thead>
+          <tbody id="matrixTableBody" class="divide-y divide-slate-800/60 font-mono">
+            <!-- Dynamic rows for Terran, Protoss, Zerg -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Right: Latest Match Opponent Benchmark & AI Coach Verdict -->
+    <div class="lg:col-span-5 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex flex-col">
+      <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <i data-lucide="scale" class="w-5 h-5 text-amber-400"></i>
+          <h3 class="font-bold text-sm tracking-wider uppercase text-white font-sc2">상대 대조 벤치마크</h3>
+        </div>
+        <span id="benchmarkMatchTag" class="text-xs text-slate-400 font-mono">최신 경기 분석</span>
+      </div>
+
+      <!-- Match Score Header -->
+      <div id="benchmarkHeader" class="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 mb-3 flex items-center justify-between">
+        <div>
+          <div class="text-[11px] text-slate-400">최근 경기 종합 스코어</div>
+          <div class="flex items-baseline gap-2 mt-0.5">
+            <span id="bmTotalScore" class="text-2xl font-black font-sc2 text-cyan-400">--.-점</span>
+            <span id="bmTotalGrade" class="px-2 py-0.5 rounded text-xs font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/30">--등급</span>
+          </div>
+        </div>
+        <div class="text-right text-xs font-mono space-y-0.5">
+          <div id="bmPhaseScores" class="text-slate-300">초: -- | 중: -- | 종: --</div>
+          <div id="bmMatchInfo" class="text-slate-500 text-[11px]">결과: 대기 중</div>
+        </div>
+      </div>
+
+      <!-- Side-by-Side Comparison Metrics -->
+      <div class="space-y-2 mb-3 text-xs">
+        <div class="bg-slate-950/60 border border-slate-800/80 rounded-lg p-2.5 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-slate-400">
+            <i data-lucide="swords" class="w-3.5 h-3.5 text-blue-400"></i>
+            <span>군사 교전 가성비</span>
+          </div>
+          <span id="bmTradeVerdict" class="font-mono font-medium text-slate-200">--</span>
+        </div>
+        <div class="bg-slate-950/60 border border-slate-800/80 rounded-lg p-2.5 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-slate-400">
+            <i data-lucide="crosshair" class="w-3.5 h-3.5 text-red-400"></i>
+            <span>화력 집중 타격비</span>
+          </div>
+          <span id="bmDamageVerdict" class="font-mono font-medium text-slate-200">--</span>
+        </div>
+        <div class="bg-slate-950/60 border border-slate-800/80 rounded-lg p-2.5 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-slate-400">
+            <i data-lucide="coins" class="w-3.5 h-3.5 text-emerald-400"></i>
+            <span>자원 소모 효율</span>
+          </div>
+          <span id="bmSpendingVerdict" class="font-mono font-medium text-slate-200">--</span>
+        </div>
+        <div class="bg-slate-950/60 border border-slate-800/80 rounded-lg p-2.5 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-slate-400">
+            <i data-lucide="heart-pulse" class="w-3.5 h-3.5 text-pink-400"></i>
+            <span>유닛 트리아지 보존</span>
+          </div>
+          <span id="bmTriageVerdict" class="font-mono font-medium text-slate-200">--</span>
+        </div>
+      </div>
+
+      <!-- AI Coach Verdict Feed -->
+      <div class="bg-slate-950/80 border border-slate-800/90 rounded-xl p-3 flex-1 flex flex-col">
+        <div class="flex items-center gap-1.5 text-xs font-bold text-amber-400 mb-2">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+          <span>AI 코치 실전 피드백 & 벤치마크 총평</span>
+        </div>
+        <div id="bmCoachFeedback" class="space-y-1.5 text-[11px] text-slate-300 font-sans leading-relaxed">
+          <div class="text-slate-500 italic">경기 진행 후 상대 플레이와의 비교 분석 브리핑이 제공됩니다.</div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
   <!-- Bottom Section: Win Rate Chart & Match History Table -->
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
     <!-- Chart -->
@@ -713,6 +867,114 @@
         document.getElementById('statWinRate').innerText = stats.win_rate + '%';
         document.getElementById('statWinLoss').innerText = `(${stats.wins}승 ${stats.losses}패)`;
         document.getElementById('statRecent10Rate').innerText = stats.recent_10_win_rate + '%';
+
+        // Update Race Win Rates Banner
+        if (stats.race_stats) {
+          const races = [
+            { key: 'TERRAN', badge: 'wrBadgeTerran', record: 'wrRecordTerran', score: 'wrScoreTerran', bar: 'wrBarTerran' },
+            { key: 'PROTOSS', badge: 'wrBadgeProtoss', record: 'wrRecordProtoss', score: 'wrScoreProtoss', bar: 'wrBarProtoss' },
+            { key: 'ZERG', badge: 'wrBadgeZerg', record: 'wrRecordZerg', score: 'wrScoreZerg', bar: 'wrBarZerg' },
+          ];
+          races.forEach(r => {
+            const st = stats.race_stats[r.key] || { games: 0, wins: 0, losses: 0, win_rate: 0 };
+            const m = stats.matrix && stats.matrix[r.key] ? stats.matrix[r.key] : {};
+            const avgVal = m.avg !== undefined ? m.avg : '--';
+            const badgeEl = document.getElementById(r.badge);
+            const recEl = document.getElementById(r.record);
+            const scEl = document.getElementById(r.score);
+            const barEl = document.getElementById(r.bar);
+            if (badgeEl) badgeEl.innerText = st.win_rate + '%';
+            if (recEl) recEl.innerText = `${st.wins}승 ${st.losses}패 (${st.games}전)`;
+            if (scEl) scEl.innerText = `평점: ${avgVal}점`;
+            if (barEl) barEl.style.width = Math.min(100, Math.max(0, st.win_rate)) + '%';
+          });
+        }
+
+        // Update 9-Matrix Table
+        if (stats.matrix) {
+          const tbody = document.getElementById('matrixTableBody');
+          if (tbody) {
+            const raceMeta = [
+              { key: 'TERRAN', label: '테란 (TvT)', color: 'text-blue-400' },
+              { key: 'PROTOSS', label: '토스 (TvP)', color: 'text-amber-400' },
+              { key: 'ZERG', label: '저그 (TvZ)', color: 'text-purple-400' },
+            ];
+            const gradeBadge = (grade, score) => {
+              let color = 'bg-slate-800 text-slate-300 border-slate-700';
+              if (grade === 'S') color = 'bg-cyan-950/80 text-cyan-300 border-cyan-500/40 font-bold';
+              else if (grade === 'A') color = 'bg-blue-950/80 text-blue-300 border-blue-500/40 font-bold';
+              else if (grade === 'B') color = 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40';
+              else if (grade === 'C') color = 'bg-amber-950/80 text-amber-300 border-amber-500/40';
+              else if (grade === 'D') color = 'bg-rose-950/80 text-rose-300 border-rose-500/40';
+              const numStr = (typeof score === 'number') ? score.toFixed(1) : score;
+              return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border ${color}"><span>${numStr}점</span><span class="text-[10px] opacity-80">[${grade}]</span></span>`;
+            };
+
+            tbody.innerHTML = raceMeta.map(r => {
+              const data = stats.matrix[r.key] || {};
+              const e = data.early || { avg_score: 75, grade: 'B' };
+              const m = data.mid || { avg_score: 75, grade: 'B' };
+              const l = data.late || { avg_score: 75, grade: 'B' };
+              const avgScore = data.avg !== undefined ? data.avg : 75;
+              let avgGrade = 'C';
+              if (avgScore >= 90) avgGrade = 'S';
+              else if (avgScore >= 80) avgGrade = 'A';
+              else if (avgScore >= 70) avgGrade = 'B';
+              else if (avgScore >= 60) avgGrade = 'C';
+              else avgGrade = 'D';
+
+              return `
+                <tr class="hover:bg-slate-800/40">
+                  <td class="py-2.5 px-3 text-left font-bold ${r.color}">${r.label}</td>
+                  <td class="py-2.5 px-3">${gradeBadge(e.grade, e.avg_score)}</td>
+                  <td class="py-2.5 px-3">${gradeBadge(m.grade, m.avg_score)}</td>
+                  <td class="py-2.5 px-3">${gradeBadge(l.grade, l.avg_score)}</td>
+                  <td class="py-2.5 px-3">${gradeBadge(avgGrade, avgScore)}</td>
+                </tr>
+              `;
+            }).join('');
+          }
+        }
+
+        // Update Opponent Benchmark & AI Coach Verdict Card
+        if (stats.latest_match && stats.latest_benchmark) {
+          const lm = stats.latest_match;
+          const bm = stats.latest_benchmark;
+          const matchTag = document.getElementById('benchmarkMatchTag');
+          const totalScore = document.getElementById('bmTotalScore');
+          const totalGrade = document.getElementById('bmTotalGrade');
+          const phaseScores = document.getElementById('bmPhaseScores');
+          const matchInfo = document.getElementById('bmMatchInfo');
+          const tradeVerdict = document.getElementById('bmTradeVerdict');
+          const damageVerdict = document.getElementById('bmDamageVerdict');
+          const spendingVerdict = document.getElementById('bmSpendingVerdict');
+          const triageVerdict = document.getElementById('bmTriageVerdict');
+          const coachFeedback = document.getElementById('bmCoachFeedback');
+
+          if (matchTag) matchTag.innerText = `${lm.enemy_race}전 (${lm.result})`;
+          if (totalScore) totalScore.innerText = `${typeof lm.total_score === 'number' ? lm.total_score.toFixed(1) : lm.total_score}점`;
+          if (totalGrade) totalGrade.innerText = `${lm.total_grade}등급`;
+          const eStr = lm.early_score !== null && lm.early_score !== undefined ? `${lm.early_score.toFixed(0)}` : '-';
+          const mStr = lm.mid_score !== null && lm.mid_score !== undefined ? `${lm.mid_score.toFixed(0)}` : '-';
+          const lStr = lm.late_score !== null && lm.late_score !== undefined ? `${lm.late_score.toFixed(0)}` : '-';
+          if (phaseScores) phaseScores.innerText = `초: ${eStr} | 중: ${mStr} | 종: ${lStr}`;
+          if (matchInfo) matchInfo.innerText = `결과: ${lm.result} (${bm.duration_str})`;
+
+          if (tradeVerdict) tradeVerdict.innerText = bm.trade_verdict || '--';
+          if (damageVerdict) damageVerdict.innerText = bm.damage_verdict || '--';
+          if (spendingVerdict) spendingVerdict.innerText = bm.spending_verdict || '--';
+          if (triageVerdict) triageVerdict.innerText = bm.triage_verdict || '--';
+
+          if (coachFeedback) {
+            const fbList = [];
+            (bm.coach_strengths || []).slice(0, 2).forEach(s => fbList.push(`<div class="text-emerald-400 flex items-start gap-1.5"><span class="font-bold text-[10px] mt-0.5 px-1 rounded bg-emerald-950 border border-emerald-500/30">강점</span><span>${s}</span></div>`));
+            (bm.coach_weaknesses || []).slice(0, 2).forEach(w => fbList.push(`<div class="text-rose-400 flex items-start gap-1.5"><span class="font-bold text-[10px] mt-0.5 px-1 rounded bg-rose-950 border border-rose-500/30">보완</span><span>${w}</span></div>`));
+            (bm.coach_recommendations || []).slice(0, 2).forEach(r => fbList.push(`<div class="text-cyan-300 flex items-start gap-1.5"><span class="font-bold text-[10px] mt-0.5 px-1 rounded bg-cyan-950 border border-cyan-500/30">전술</span><span>${r}</span></div>`));
+            if (fbList.length > 0) {
+              coachFeedback.innerHTML = fbList.join('');
+            }
+          }
+        }
 
         // Update Chart
         if (winRateChart && stats.history_rates) {

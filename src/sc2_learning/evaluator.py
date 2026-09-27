@@ -58,6 +58,8 @@ class AutonomousEvaluator:
         map_name: str = "",
         fitness: Optional[FitnessBreakdown] = None,
         metrics: Optional[MatchMetrics] = None,
+        phase_scores: Optional[Any] = None,
+        benchmark: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Saves match outcome with full economic/trade fitness metrics and returns updated statistics."""
         record = {
@@ -74,6 +76,8 @@ class AutonomousEvaluator:
             "replay_file": replay_file,
             "fitness": fitness.to_dict() if fitness else None,
             "metrics": asdict(metrics) if metrics else None,
+            "phase_scores": phase_scores.to_dict() if hasattr(phase_scores, "to_dict") else phase_scores,
+            "benchmark": benchmark.to_dict() if hasattr(benchmark, "to_dict") else benchmark,
         }
         self.history.append(record)
 
@@ -99,10 +103,21 @@ class AutonomousEvaluator:
     def get_summary(self) -> Dict[str, Any]:
         self._load_history()
         total = len(self.history)
+        from src.sc2_learning.phase_evaluator import NINE_MATRIX_MGR
+        if NINE_MATRIX_MGR.data.get("overall", {}).get("total_games", 0) == 0 and total > 0:
+            try:
+                NINE_MATRIX_MGR.backfill_from_history(self.history)
+            except Exception:
+                pass
+
         if total == 0:
             return {
                 "total_games": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
                 "avg_fitness": 0.0, "avg_trade_ratio": 1.0, "avg_spending_ratio": 0.0,
+                "race_stats": NINE_MATRIX_MGR.data.get("race_stats", {}),
+                "phase_matrix": NINE_MATRIX_MGR.data.get("matrix", {}),
+                "latest_match": None,
+                "latest_benchmark": None,
             }
 
         wins = sum(1 for r in self.history if r["result"] == "Victory")
@@ -133,6 +148,10 @@ class AutonomousEvaluator:
             "avg_fitness": avg_fitness,
             "avg_trade_ratio": avg_trade,
             "avg_spending_ratio": avg_spending,
+            "race_stats": NINE_MATRIX_MGR.data.get("race_stats", {}),
+            "phase_matrix": NINE_MATRIX_MGR.data.get("matrix", {}),
+            "latest_match": NINE_MATRIX_MGR.data.get("latest_match", None),
+            "latest_benchmark": NINE_MATRIX_MGR.data.get("latest_benchmark", None),
         }
 
     def evolve_strategy(

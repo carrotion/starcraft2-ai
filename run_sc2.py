@@ -1,4 +1,4 @@
-﻿"""StarCraft II Coached AI Runner with Auto Zombie Cleanup, Safe Exception Handling, and Pause-on-Exit."""
+"""StarCraft II Coached AI Runner with Auto Zombie Cleanup, Safe Exception Handling, and Pause-on-Exit."""
 
 import os
 import sys
@@ -78,7 +78,8 @@ def main():
         ]
         mode_desc = f"1 vs 1 (나: 테란 vs 적: {args.enemy.upper()})"
 
-    my_bot = Bot(Race.Terran, CoachedTerranBot(CURRENT_STRATEGY))
+    bot_instance = CoachedTerranBot(CURRENT_STRATEGY)
+    my_bot = Bot(Race.Terran, bot_instance)
     players = [my_bot] + opponents
 
     print("=" * 70)
@@ -109,9 +110,13 @@ def main():
             players=players,
             realtime=args.realtime,
         )
-        print(f"\n" + "=" * 50)
-        print(f"  [게임 종료] 최종 결과: {result}")
-        print("=" * 50)
+        if getattr(bot_instance, "last_phase_scores", None) and getattr(bot_instance, "last_benchmark", None):
+            from src.sc2_learning.phase_evaluator import NINE_MATRIX_MGR
+            print("\n" + NINE_MATRIX_MGR.format_console_scorecard(bot_instance.last_phase_scores, bot_instance.last_benchmark) + "\n")
+        else:
+            print(f"\n" + "=" * 50)
+            print(f"  [게임 종료] 최종 결과: {result}")
+            print("=" * 50)
     except KeyboardInterrupt:
         print("\n[사용자 중단] 게임을 정상적으로 종료했습니다.")
     except Exception as e:

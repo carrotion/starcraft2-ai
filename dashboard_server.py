@@ -25,6 +25,7 @@ os.environ["SC2PATH"] = sc2_p or r"F:\Game\StarCraft II"
 
 from src.sc2_learning.evaluator import AutonomousEvaluator
 from src.sc2_learning.live_telemetry import get_latest_telemetry, get_all_active_workers
+from src.sc2_learning.phase_evaluator import NINE_MATRIX_MGR
 from src.sc2_learning.process_manager import TRAIN_MANAGER
 
 REPLAYS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "replays"))
@@ -60,7 +61,7 @@ async def serve_dashboard():
 
 @app.get("/api/stats")
 async def get_stats():
-    """Returns aggregated stats and recent match records for charts."""
+    """Returns aggregated stats, 9-matrix, race win rates, and recent match records for charts."""
     summary = evaluator.get_summary()
     history = evaluator._load_history()
 
@@ -74,7 +75,17 @@ async def get_stats():
 
     summary["history_rates"] = rolling_rates[-30:]  # last 30 games for chart
     summary["recent_history"] = history[-20:]  # last 20 games for table
+    summary["matrix"] = NINE_MATRIX_MGR.data.get("matrix", {})
+    summary["race_stats"] = NINE_MATRIX_MGR.data.get("race_stats", {})
+    summary["latest_match"] = NINE_MATRIX_MGR.data.get("latest_match", None)
+    summary["latest_benchmark"] = NINE_MATRIX_MGR.data.get("latest_benchmark", None)
     return summary
+
+
+@app.get("/api/matrix")
+async def get_phase_matrix():
+    """Returns the full 9-Matrix evaluation data, race win rates, and latest opponent benchmark."""
+    return NINE_MATRIX_MGR.data
 
 
 @app.get("/api/status")

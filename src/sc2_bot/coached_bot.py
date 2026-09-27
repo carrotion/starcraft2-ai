@@ -38,6 +38,8 @@ class CoachedTerranBot(BotAI):
         self.last_econ_sample_time: float = 0.0
         self.last_metrics = None
         self.last_fitness = None
+        self.last_phase_scores = None
+        self.last_benchmark = None
         self.unit_stuck_watch: dict[int, tuple[Point2, float]] = {}
 
         # Reconnaissance & Persistent Fog-of-War Intel
@@ -1391,6 +1393,11 @@ class CoachedTerranBot(BotAI):
         """Called automatically by python-sc2 at match conclusion to trigger reinforcement learning updates."""
         try:
             from src.sc2_learning.fitness import extract_metrics_from_bot, calculate_fitness
+            from src.sc2_learning.phase_evaluator import (
+                calculate_match_phase_scores,
+                generate_opponent_benchmark,
+                NINE_MATRIX_MGR,
+            )
 
             res_str = game_result.name.capitalize() if hasattr(game_result, "name") else str(game_result)
             metrics = extract_metrics_from_bot(self, game_result, self.time)
@@ -1398,6 +1405,16 @@ class CoachedTerranBot(BotAI):
             self.last_metrics = metrics
             self.last_fitness = fitness
 
+            # 1. 9-Matrix Phase Scores & Opponent Benchmark Calculation
+            phase_scores = calculate_match_phase_scores(metrics, self.time, res_str, self.actual_enemy_race)
+            benchmark = generate_opponent_benchmark(metrics, self.time, res_str, self.actual_enemy_race, phase_scores)
+            self.last_phase_scores = phase_scores
+            self.last_benchmark = benchmark
+
+            # 2. Update Persistent 9-Matrix & Race Win Rates
+            NINE_MATRIX_MGR.update_match(phase_scores, benchmark, res_str, self.actual_enemy_race)
+
+            # 3. Reinforcement Learning Strategy & Micro Adaptation
             self.unit_optimizer.update_after_match(
                 enemy_race=self.actual_enemy_race,
                 result=res_str,
@@ -1412,15 +1429,29 @@ class CoachedTerranBot(BotAI):
                 fitness_breakdown=fitness,
             )
 
-            print(
-                f"\n[RL 복합 피트니스 평가] 종합 스코어: {fitness.composite_score:+.1f}점 "
-                f"(결과: {fitness.result_score:+.0f} | "
-                f"교전가성비: {fitness.trade_score:+.1f}[비율 {fitness.trade_ratio:.2f}:1] | "
-                f"체력보존: {fitness.hp_preservation_score:+.1f}[위험손실 -{fitness.hp_preservation_penalty:.1f}, 회복 +{fitness.hp_recovery_bonus:.1f}] | "
-                f"자원소모: {fitness.econ_score:+.1f}[소모율 {fitness.spending_ratio*100:.1f}%, 잉여감점 -{fitness.float_penalty:.1f}] | "
-                f"전투마이크로: {fitness.micro_score:+.1f}[피해교환 {fitness.damage_ratio:.2f}:1])"
-            )
-            print(f"[RL 지능형 최적화] {self.actual_enemy_race}전 결과({res_str}) 기반 16종 조합 가중치 & 예술적 전투 마이크로 정책 강화학습 갱신 완료!\n")
+            # 4. In-Game Chat Broadcast (Real-time on-screen spectator display)
+            try:
+                e_s = f"{phase_scores.early_score:.0f}점" if phase_scores.early_score is not None else "-"
+                m_s = f"{phase_scores.mid_score:.0f}점" if phase_scores.mid_score is not None else "-"
+                l_s = f"{phase_scores.late_score:.0f}점" if phase_scores.late_score is not None else "-"
+                chat_msg = f"[경기평가] {self.actual_enemy_race}전 {phase_scores.total_score:.1f}점({phase_scores.total_grade}급) | 초:{e_s} 중:{m_s} 종:{l_s} | 가성비 {benchmark.trade_ratio:.2f}:1"
+                await self.chat_send(chat_msg)
+            except Exception:
+                pass
+
+            # 5. Live Telemetry & Radar Caster Log
+            try:
+                self.telemetry.log_event(
+                    f"🏁 [경기 평가] {self.actual_enemy_race}전 스코어 {phase_scores.total_score:.1f}점 [{phase_scores.total_grade}] (초:{e_s} 중:{m_s} 종:{l_s})",
+                    "victory" if res_str == "Victory" else "info",
+                )
+            except Exception:
+                pass
+
+            # 6. Prominent eSports Console Scorecard & Opponent Benchmark Display
+            scorecard_str = NINE_MATRIX_MGR.format_console_scorecard(phase_scores, benchmark)
+            print("\n" + scorecard_str + "\n")
+
         except Exception as e:
             print(f"[RL 가중치 최적화 경고] on_end 가중치 업데이트 오류: {e}")
 
