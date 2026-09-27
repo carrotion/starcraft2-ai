@@ -2,8 +2,8 @@
   "matrix": {
     "TERRAN": {
       "early": {
-        "count": 453,
-        "avg_score": 62.0,
+        "count": 463,
+        "avg_score": 63.0,
         "last_score": 62.0,
         "grade": "C",
         "scores": [
@@ -21,30 +21,20 @@
           62.0,
           62.0,
           62.0,
+          71.0,
           62.0,
-          62.0,
-          62.0,
-          62.0,
-          62.0,
+          65.0,
+          65.0,
+          68.0,
           62.0
         ]
       },
       "mid": {
-        "count": 453,
-        "avg_score": 69.5,
-        "last_score": 68.0,
+        "count": 463,
+        "avg_score": 69.3,
+        "last_score": 52.2,
         "grade": "C",
         "scores": [
-          95.0,
-          50.0,
-          56.6,
-          75.0,
-          57.7,
-          90.0,
-          63.0,
-          60.6,
-          57.0,
-          40.7,
           75.0,
           85.0,
           63.0,
@@ -54,25 +44,25 @@
           85.0,
           75.0,
           68.0,
-          68.0
+          68.0,
+          48.0,
+          95.0,
+          68.0,
+          75.0,
+          50.7,
+          46.3,
+          70.0,
+          61.8,
+          75.0,
+          52.2
         ]
       },
       "late": {
-        "count": 438,
-        "avg_score": 41.0,
-        "last_score": 36.9,
+        "count": 448,
+        "avg_score": 45.0,
+        "last_score": 37.3,
         "grade": "D",
         "scores": [
-          60.0,
-          25.0,
-          34.0,
-          37.8,
-          31.2,
-          65.0,
-          38.3,
-          33.3,
-          30.7,
-          27.6,
           38.7,
           60.0,
           37.1,
@@ -82,20 +72,29 @@
           50.0,
           50.0,
           38.4,
-          36.9
+          36.9,
+          50.9,
+          68.0,
+          49.5,
+          47.3,
+          36.2,
+          36.6,
+          47.3,
+          44.2,
+          46.7,
+          37.3
         ]
       },
-      "avg": 57.5
+      "avg": 59.1
     },
     "PROTOSS": {
       "early": {
-        "count": 489,
-        "avg_score": 60.9,
+        "count": 496,
+        "avg_score": 62.5,
         "last_score": 62.0,
         "grade": "C",
         "scores": [
           62.0,
-          39.4,
           62.0,
           62.0,
           62.0,
@@ -113,22 +112,16 @@
           62.0,
           62.0,
           62.0,
+          72.0,
           62.0
         ]
       },
       "mid": {
-        "count": 489,
-        "avg_score": 78.1,
+        "count": 496,
+        "avg_score": 75.0,
         "last_score": 85.0,
         "grade": "B",
         "scores": [
-          75.0,
-          34.4,
-          78.0,
-          58.7,
-          85.0,
-          85.0,
-          85.0,
           80.0,
           88.0,
           85.0,
@@ -141,22 +134,22 @@
           85.0,
           75.0,
           95.0,
+          85.0,
+          63.0,
+          39.3,
+          75.0,
+          63.0,
+          38.0,
+          75.0,
           85.0
         ]
       },
       "late": {
-        "count": 489,
-        "avg_score": 50.0,
-        "last_score": 50.0,
+        "count": 496,
+        "avg_score": 51.1,
+        "last_score": 60.0,
         "grade": "D",
         "scores": [
-          50.0,
-          29.9,
-          50.0,
-          31.9,
-          60.0,
-          50.0,
-          50.0,
           50.0,
           60.0,
           50.0,
@@ -169,15 +162,22 @@
           50.0,
           38.0,
           60.0,
-          50.0
+          50.0,
+          46.8,
+          44.7,
+          60.0,
+          48.1,
+          35.0,
+          48.3,
+          60.0
         ]
       },
-      "avg": 63.0
+      "avg": 62.9
     },
     "ZERG": {
       "early": {
-        "count": 754,
-        "avg_score": 62.3,
+        "count": 767,
+        "avg_score": 62.0,
         "last_score": 62.0,
         "grade": "C",
         "scores": [
@@ -188,110 +188,159 @@
           62.0,
           62.0,
           62.0,
+          65.0,
+          52.0,
+          65.0,
           62.0,
           62.0,
           62.0,
           62.0,
           62.0,
-          67.5,
           62.0,
           62.0,
           62.0,
-          62.0,
-          62.0,
-          62.0,
+          65.0,
           62.0
         ]
       },
       "mid": {
-        "count": 729,
-        "avg_score": 86.2,
-        "last_score": 95.0,
-        "grade": "A",
+        "count": 742,
+        "avg_score": 68.3,
+        "last_score": 48.2,
+        "grade": "C",
         "scores": [
-          95.0,
-          85.0,
-          95.0,
-          85.0,
-          95.0,
-          85.0,
-          52.1,
-          85.0,
-          85.0,
-          100.0,
-          85.0,
-          68.0,
-          100.0,
           78.0,
           98.0,
           78.0,
           85.0,
           100.0,
           75.0,
-          95.0
+          95.0,
+          54.2,
+          55.8,
+          62.2,
+          52.3,
+          50.0,
+          53.5,
+          75.0,
+          60.1,
+          40.6,
+          73.0,
+          80.0,
+          52.5,
+          48.2
         ]
       },
       "late": {
-        "count": 704,
-        "avg_score": 58.3,
-        "last_score": 60.0,
+        "count": 717,
+        "avg_score": 50.5,
+        "last_score": 39.4,
         "grade": "D",
         "scores": [
-          60.0,
-          50.0,
-          60.0,
-          50.0,
-          60.0,
-          50.0,
-          27.2,
-          60.0,
-          50.0,
-          68.0,
-          50.0,
-          50.0,
-          100.0,
           50.0,
           60.0,
           60.0,
           50.0,
           100.0,
           50.0,
-          60.0
+          60.0,
+          43.7,
+          44.8,
+          44.4,
+          37.3,
+          35.0,
+          41.8,
+          46.6,
+          42.9,
+          37.6,
+          60.0,
+          60.0,
+          45.5,
+          39.4
         ]
       },
-      "avg": 68.9
+      "avg": 60.3
     }
   },
   "race_stats": {
     "TERRAN": {
-      "games": 453,
+      "games": 463,
       "wins": 9,
-      "losses": 444,
+      "losses": 454,
       "ties": 0,
-      "win_rate": 2.0
+      "win_rate": 1.9
     },
     "PROTOSS": {
-      "games": 489,
+      "games": 496,
       "wins": 51,
-      "losses": 438,
+      "losses": 445,
       "ties": 0,
-      "win_rate": 10.4
+      "win_rate": 10.3
     },
     "ZERG": {
-      "games": 754,
+      "games": 767,
       "wins": 47,
-      "losses": 661,
+      "losses": 674,
       "ties": 46,
-      "win_rate": 6.2
+      "win_rate": 6.1
     }
   },
   "overall": {
-    "total_games": 1696,
+    "total_games": 1726,
     "wins": 107,
-    "losses": 1543,
-    "win_rate": 6.3,
+    "losses": 1573,
+    "win_rate": 6.2,
     "avg_score": 75.0
   },
-  "latest_match": null,
-  "latest_benchmark": null
+  "latest_match": {
+    "enemy_race": "TERRAN",
+    "duration_sec": 654.1,
+    "result": "Defeat",
+    "early_score": 62.0,
+    "early_grade": "C",
+    "early_summary": "SCV 생산 양호(26기), 자원 잉여 없음(인프라 즉시전환), 초반 벙커/병력 손실 발생",
+    "mid_score": 52.2,
+    "mid_grade": "D",
+    "mid_summary": "중반 교전 손실 발생(0.49:1), 자원 소모율 극대화(94.8%), 의료선 지원 및 0기 구출",
+    "late_score": 37.3,
+    "late_grade": "D",
+    "late_summary": "후반 패배, 잔존 부대 체력 우수(70%+)",
+    "total_score": 48.7,
+    "total_grade": "D"
+  },
+  "latest_benchmark": {
+    "match_id": 0,
+    "enemy_race": "TERRAN",
+    "result": "Defeat",
+    "duration_str": "10:54",
+    "our_kills_val": 1400,
+    "enemy_kills_val": 2843,
+    "trade_diff": -1443,
+    "trade_ratio": 0.49,
+    "trade_verdict": "상대 대비 -1,443원 열세 (0.49:1)",
+    "damage_dealt": 1667.8,
+    "damage_taken": 23590.3,
+    "damage_ratio": 0.07,
+    "damage_verdict": "화력 타격비 0.07배 열세 (집중 사격 필요)",
+    "collected_total": 8918,
+    "spent_total": 8450,
+    "spending_ratio": 0.948,
+    "spending_verdict": "자원 소모율 94.8% (탁월한 인프라 회전력)",
+    "triage_saved": 0,
+    "triage_lost": 38,
+    "triage_rate": 0.0,
+    "total_healed": 555.1,
+    "triage_verdict": "0기 응급 구출 성공 / 38기 위험 손실 (회복 성공률 0.0%)",
+    "enemy_structures_destroyed": 0,
+    "coach_strengths": [
+      "수집한 자원의 94.8%를 병력과 테크로 즉각 전환했습니다."
+    ],
+    "coach_weaknesses": [
+      "교전 시 무리한 돌격으로 상대 화망에 병력 손실이 발생했습니다.",
+      "빈사 유닛 38기가 의료선 후퇴를 제때 못하고 전사했습니다."
+    ],
+    "coach_recommendations": [
+      "테란전: 공성전차 라인 싸움 시 밤까마귀 방해매트릭스와 바이킹 시야 확보를 선점하세요."
+    ]
+  }
 }

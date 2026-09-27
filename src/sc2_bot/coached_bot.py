@@ -58,6 +58,9 @@ class CoachedTerranBot(BotAI):
         self.critical_hp_units_saved: int = 0
         self.critical_hp_units_lost: int = 0
 
+        # Fast Expansion SCV pre-dispatch
+        self.fast_expand_scv_tag: Optional[int] = None
+
 
 
     def _safe_corner_depots(self) -> List[Point2]:
@@ -87,8 +90,67 @@ class CoachedTerranBot(BotAI):
             pass
         return fallback
 
+    def is_position_blocking_resources(self, pos: Point2, building_type: Optional[UnitTypeId] = None) -> bool:
+        """자원(미네랄/가스) 채취 경로 및 사령부와 자원 사이의 채취 회랑을 방해하는지 철저히 검증합니다.
+        커맨드 센터와 자원 사이 공간이나 자원 패치 인근에 건물이 배치되는 것을 원천 차단합니다."""
+        if not pos:
+            return True
+
+        all_resources = self.mineral_field | self.vespene_geyser
+
+        # 1. Proximity check to ANY resource patch on the map
+        # A building placed within 3.5 tiles of any mineral patch or geyser interferes with worker pathing/mining
+        close_resources = all_resources.closer_than(3.5, pos)
+        if close_resources:
+            return True
+
+        # 2. Base-specific mining corridor check (for every CC and its local resource patches)
+        cc_positions = [cc.position for cc in self.townhalls]
+        for cc_pos in cc_positions:
+            local_resources = all_resources.closer_than(11.0, cc_pos)
+            if not local_resources:
+                continue
+
+            # Mining Yard Sector: Center of mass of local resources
+            res_coords = [r.position for r in local_resources]
+            avg_x = sum(p.x for p in res_coords) / len(res_coords)
+            avg_y = sum(p.y for p in res_coords) / len(res_coords)
+            res_center = Point2((avg_x, avg_y))
+
+            vec_to_res = res_center - cc_pos
+            vec_to_pos = pos - cc_pos
+            dist_to_cc = pos.distance_to(cc_pos)
+
+            # A. Mining Yard Check: If pos is in the cone/sector between CC and mineral line
+            # within distance 7.5 of CC, and pointing towards resources (dot product > 0)
+            if dist_to_cc < 7.5 and vec_to_res.length > 0.1:
+                cos_angle = (vec_to_pos.x * vec_to_res.x + vec_to_pos.y * vec_to_res.y) / (vec_to_pos.length * vec_to_res.length + 1e-6)
+                # If within ~65 degrees of the resource cluster center and between CC and minerals
+                if cos_angle > 0.40:
+                    return True
+
+            # B. Linear Corridor Check for EACH individual mineral patch & geyser
+            for res_pos in res_coords:
+                seg_vec = res_pos - cc_pos
+                seg_len_sq = seg_vec.x * seg_vec.x + seg_vec.y * seg_vec.y
+                if seg_len_sq < 1e-4:
+                    continue
+
+                diff = pos - cc_pos
+                t = (diff.x * seg_vec.x + diff.y * seg_vec.y) / seg_len_sq
+
+                # Check if pos is alongside the line segment (0 <= t <= 1)
+                if -0.1 <= t <= 1.1:
+                    proj = Point2((cc_pos.x + t * seg_vec.x, cc_pos.y + t * seg_vec.y))
+                    dist_to_seg = pos.distance_to(proj)
+                    # Corridor clearance width: 2.8 tiles radius from the direct mining line
+                    if dist_to_seg < 2.8:
+                        return True
+
+        return False
+
     async def find_safe_main_placement(self, building: UnitTypeId, addon_place: bool = False) -> Optional[Point2]:
-        """Finds a safe building placement strictly on the main base high ground, reserving space for add-on if requested."""
+        """Finds a safe building placement strictly on the main base high ground, avoiding mining lines and reserving space for add-on if requested."""
         if not self.townhalls:
             return None
         main_base = self.townhalls.first
@@ -96,19 +158,33 @@ class CoachedTerranBot(BotAI):
         ramp_choke = self._safe_ramp_top_center(main_base.position)
         ramp_bunker = self._safe_ramp_bunker_placement()
 
-        # Vector pointing inward from the ramp into the deep main base
-        diff = main_base.position - ramp_choke
-        inward_vec = diff.normalized if diff.length > 0.1 else Point2((1, 0))
-        perp_vec = Point2((-inward_vec.y, inward_vec.x))
+        # Determine the direction of the resource cluster to explicitly avoid it
+        local_minerals = self.mineral_field.closer_than(11.0, main_base.position)
+        if local_minerals:
+            avg_m_x = sum(m.position.x for m in local_minerals) / len(local_minerals)
+            avg_m_y = sum(m.position.y for m in local_minerals) / len(local_minerals)
+            res_center = Point2((avg_m_x, avg_m_y))
+            res_dir = (res_center - main_base.position).normalized
+            # open_dir points directly away from the mineral line into the safe open yard
+            open_dir = -res_dir
+        else:
+            diff = main_base.position - ramp_choke
+            open_dir = diff.normalized if diff.length > 0.1 else Point2((1, 0))
+
+        perp_dir = Point2((-open_dir.y, open_dir.x))
+        ramp_dir = (ramp_choke - main_base.position).normalized
 
         seeds = [
-            main_base.position + inward_vec * 5.0,
-            main_base.position + inward_vec * 8.0,
-            main_base.position + perp_vec * 6.0,
-            main_base.position - perp_vec * 6.0,
-            main_base.position + inward_vec * 11.0,
-            main_base.position + perp_vec * 9.0,
-            main_base.position - perp_vec * 9.0,
+            main_base.position + open_dir * 5.0,
+            main_base.position + open_dir * 8.0,
+            main_base.position + open_dir * 4.0 + perp_dir * 5.0,
+            main_base.position + open_dir * 4.0 - perp_dir * 5.0,
+            main_base.position + perp_dir * 6.0,
+            main_base.position - perp_dir * 6.0,
+            ramp_choke - ramp_dir * 4.0,
+            main_base.position + open_dir * 11.0,
+            main_base.position + perp_dir * 9.0,
+            main_base.position - perp_dir * 9.0,
         ]
 
         map_w = self.game_info.map_size[0]
@@ -125,6 +201,10 @@ class CoachedTerranBot(BotAI):
                 addon_place=addon_place,
             )
             if pos:
+                # 0. STRICT: Must NOT block resources or mining corridors
+                if self.is_position_blocking_resources(pos, building):
+                    continue
+
                 # 1. Height must strictly match main base high ground (NEVER build down below on natural)
                 if self.get_terrain_height(pos) != base_h:
                     continue
@@ -133,21 +213,18 @@ class CoachedTerranBot(BotAI):
                     continue
                 if ramp_bunker and pos.distance_to(ramp_bunker) < 4.5:
                     continue
-                # 3. Must not block mineral harvesters
-                if self.mineral_field.closer_than(2.5, pos):
-                    continue
 
-                # 4. If add-on required, double check that the right-side slot is completely free and on high ground!
+                # 3. If add-on required, double check that the right-side slot is completely free and on high ground!
                 if addon_place:
                     addon_pos = pos.offset((2.5, -0.5))
                     if self.get_terrain_height(addon_pos) != base_h:
                         continue
+                    if self.is_position_blocking_resources(addon_pos, building):
+                        continue
                     if not await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_pos):
                         continue
-                    if self.mineral_field.closer_than(2.5, addon_pos):
-                        continue
 
-                # 5. Clearance Aisles: Ensure production & tech buildings do not clump with distance < 4.2
+                # 4. Clearance Aisles: Ensure production & tech buildings do not clump with distance < 4.2
                 # Center-to-center distance >= 4.2 guarantees at least a 1.2~1.5 tile walkway for Tanks, Thors, and Bio
                 if building in {UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT, UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY}:
                     clumping = self.structures.filter(
@@ -165,25 +242,26 @@ class CoachedTerranBot(BotAI):
 
                 return pos
 
-
-        # Fallback: strictly check height around main base with addon_place
+        # Fallback: strictly check height around main base with addon_place and resource check
         fallback_pos = await self.find_placement(
             building,
-            near=main_base.position,
+            near=main_base.position + open_dir * 6.0,
             max_distance=fallback_dist,
             random_alternative=True,
             addon_place=addon_place,
         )
         if fallback_pos and self.get_terrain_height(fallback_pos) == base_h:
-            if addon_place:
-                addon_pos = fallback_pos.offset((2.5, -0.5))
-                if (
-                    self.get_terrain_height(addon_pos) == base_h
-                    and await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_pos)
-                ):
+            if not self.is_position_blocking_resources(fallback_pos, building):
+                if addon_place:
+                    addon_pos = fallback_pos.offset((2.5, -0.5))
+                    if (
+                        self.get_terrain_height(addon_pos) == base_h
+                        and not self.is_position_blocking_resources(addon_pos, building)
+                        and await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_pos)
+                    ):
+                        return fallback_pos
+                else:
                     return fallback_pos
-            else:
-                return fallback_pos
         return None
 
 
@@ -442,66 +520,87 @@ class CoachedTerranBot(BotAI):
                     oc(AbilityId.CALLDOWNMULE_CALLDOWNMULE, richest)
 
 
-        # 4. Multi-Base Expansion (자원 상황 및 전황에 따른 지능형 멀티 확장)
+        rax_structures = self.structures(UnitTypeId.BARRACKS)
+        rax_count = rax_structures.amount + self.already_pending(UnitTypeId.BARRACKS)
+
+        # 4. Multi-Base Expansion (자원 상황 및 전황에 따른 지능형 초고속 멀티 확장)
         total_cc = cc_list.amount + self.already_pending(UnitTypeId.COMMANDCENTER)
         pending_cc = self.already_pending(UnitTypeId.COMMANDCENTER)
-        has_secure_main = (
-            self.structures(UnitTypeId.BUNKER).ready.amount >= 1
-            and self.units(UnitTypeId.MARINE).amount >= 4
+
+        # Non-combat scout units (일꾼, 대군주, 변신수 등)는 멀티 확장을 방해하지 못하도록 위협에서 제외!
+        non_combat_scout_types = {
+            UnitTypeId.SCV, UnitTypeId.PROBE, UnitTypeId.DRONE,
+            UnitTypeId.OVERLORD, UnitTypeId.OVERLORDCOCOON,
+            UnitTypeId.CHANGELING, UnitTypeId.CHANGELINGMARINESHIELD,
+            UnitTypeId.CHANGELINGMARINE, UnitTypeId.CHANGELINGZEALOT, UnitTypeId.CHANGELINGZERGLING,
+            UnitTypeId.LARVA, UnitTypeId.EGG
+        }
+        combat_enemies_near_base = any(
+            self.enemy_units.exclude_type(non_combat_scout_types).closer_than(16, cc.position)
+            for cc in cc_list
         )
-        enemies_near_any_base = any(self.enemy_units.closer_than(20, cc.position) for cc in cc_list)
+
+        if pending_cc > 0 or total_cc >= 2:
+            self.fast_expand_scv_tag = None
+
+        # Pre-dispatch SCV towards natural expansion when minerals approach 400 (프로급 앞마당 이동)
+        if total_cc == 1 and pending_cc == 0 and rax_count >= 1 and self.minerals >= 270 and not combat_enemies_near_base:
+            if not self.fast_expand_scv_tag or not self.workers.find_by_tag(self.fast_expand_scv_tag):
+                next_expo = await self.get_next_expansion()
+                if next_expo:
+                    candidates = self.workers.closer_than(20, main_base).filter(lambda w: not w.is_carrying_minerals)
+                    worker = candidates.first if candidates else (self.workers.first if self.workers else None)
+                    if worker:
+                        self.fast_expand_scv_tag = worker.tag
+                        worker.move(next_expo)
 
         should_expand = False
-        if total_cc < self.strategy.max_bases and pending_cc == 0 and not enemies_near_any_base:
+        if total_cc < self.strategy.max_bases and pending_cc == 0 and not combat_enemies_near_base:
             if total_cc == 1:
-                # [제2기지: 앞마당 멀티] 본진 벙커 + 해병 4기 + SCV 16기 이상 시 안정적 확장
-                # 또는 미네랄 500 이상 누적 시 빠른 앞마당 확장
-                if (
-                    (len(workers) >= 16 and has_secure_main and self.can_afford(UnitTypeId.COMMANDCENTER))
-                    or (self.minerals >= 500 and self.structures(UnitTypeId.BARRACKS).ready)
-                ):
+                # [제2기지: 앞마당 멀티] 1-Rax Fast Expand (1:45~2:05 황금 타이밍)
+                # 병영 1개 착공/완성 + 일꾼 15기 이상 + 400 미네랄 충족 즉시 초고속 착공!
+                if rax_count >= 1 and len(workers) >= 15 and self.can_afford(UnitTypeId.COMMANDCENTER):
                     should_expand = True
 
             elif total_cc == 2:
-                # [제3기지: 삼룡이 멀티] 앞마당 사령부가 완성된 후:
-                # 1) 일꾼 32기 이상 확보되어 앞마당이 활성화되었거나
-                # 2) 전차 1기 이상 또는 병력 인구수 16 이상으로 수비력 확보 시
-                # 3) 본진 미네랄 필드가 고갈되기 시작할 때 (남은 미네랄 필드 5개 미만)
-                # 4) 미네랄 잉여자원이 500 이상 누적될 때
-                nat_cc_ready = other_ccs.ready.amount >= 1
-                main_minerals = self.mineral_field.closer_than(10, main_base)
-                main_depleted = len(main_minerals) < 5
-                has_midgame_army = (
-                    self.units(UnitTypeId.SIEGETANK).ready.amount >= 1
-                    or self.supply_army >= 16
-                    or self.time > 360
-                )
-                if (
-                    nat_cc_ready
-                    and (len(workers) >= 32 or has_midgame_army or main_depleted or self.minerals >= 500)
-                    and self.can_afford(UnitTypeId.COMMANDCENTER)
-                ):
+                # [제3기지: 삼룡이 멀티] 4:00~4:30 가속 타이밍
+                # 일꾼 22기 이상 또는 4분(240초) 경과 시 즉시 사령부 착공
+                if (len(workers) >= 22 or self.time >= 240.0 or self.minerals >= 450) and self.can_afford(UnitTypeId.COMMANDCENTER):
                     should_expand = True
 
             elif total_cc >= 3:
-                # [제4기지+: 후반 매크로 멀티]
-                # 1) 잉여 미네랄이 600 이상 누적되어 자원 회전 필요
-                # 2) 이전 기지들의 자원 고갈이 진행 중 (활성 미네랄 패치 14개 미만)
-                # 3) 게임 시간 10분(600초) 이상 장기전
-                active_minerals_count = sum(len(self.mineral_field.closer_than(10, cc)) for cc in cc_list.ready)
-                if (
-                    (self.minerals >= 600 or active_minerals_count < 14 or self.time > 600)
-                    and self.can_afford(UnitTypeId.COMMANDCENTER)
-                ):
+                # [제4기지+: 후반 매크로 멀티] 6:30~7:30 가속 타이밍
+                # 일꾼 42기 이상 또는 6분 30초(390초) 경과 시 즉시 사령부 착공
+                if (len(workers) >= 42 or self.time >= 390.0 or self.minerals >= 500) and self.can_afford(UnitTypeId.COMMANDCENTER):
                     should_expand = True
 
         if should_expand:
-            await self.expand_now()
-            self.telemetry.log_event(f"자원 확장: 제{total_cc + 1}기지(멀티) 건설 착공!", "expansion")
+            next_expo = await self.get_next_expansion()
+            expand_worker = None
+            if self.fast_expand_scv_tag:
+                expand_worker = self.workers.find_by_tag(self.fast_expand_scv_tag)
+            if not expand_worker and next_expo:
+                expand_worker = self.select_build_worker(next_expo)
+
+            if expand_worker and next_expo:
+                self.do(expand_worker.build(UnitTypeId.COMMANDCENTER, next_expo), subtract_cost=True, ignore_warning=True)
+            else:
+                await self.expand_now()
+
+            self.fast_expand_scv_tag = None
+            stage_name = "앞마당" if total_cc == 1 else ("삼룡이(제3기지)" if total_cc == 2 else f"제{total_cc + 1}기지")
+            self.telemetry.log_event(f"⚡ [초고속 멀티] {stage_name} 사령부(Command Center) 건설 착공!", "expansion")
 
         # 5. Supply Depot logic (입구 보급고 심시티 + 스마트 게이트)
         pending_depots = self.already_pending(UnitTypeId.SUPPLYDEPOT)
-        buffer = 14 if total_cc >= 3 else (8 if total_cc >= 2 else 4)
+        if total_cc == 1 and pending_cc == 0 and rax_count >= 1 and self.minerals >= 270:
+            buffer = 2  # 1베이스 앞마당 전 400미네랄 모으는 동안 불필요한 보급고 지출 억제
+        elif total_cc >= 3:
+            buffer = 14
+        elif total_cc >= 2:
+            buffer = 8
+        else:
+            buffer = 4
         max_pending_depots = 3 if total_cc >= 3 else 2
 
         if self.supply_left < buffer and pending_depots < max_pending_depots and self.supply_cap < 200:
@@ -510,6 +609,7 @@ class CoachedTerranBot(BotAI):
                 free_corners = [
                     p for p in self._safe_corner_depots()
                     if not existing_wall_blds.closer_than(1.2, p)
+                    and not self.is_position_blocking_resources(p, UnitTypeId.SUPPLYDEPOT)
                 ]
 
                 placed_depot = False
@@ -540,8 +640,6 @@ class CoachedTerranBot(BotAI):
                 depot(AbilityId.MORPH_SUPPLYDEPOT_LOWER)
 
         # 6. First Barracks (병영 1개 - 본진 내부 고지대에 부속 건물 공간을 확보하여 안전하게 건설)
-        rax_structures = self.structures(UnitTypeId.BARRACKS)
-        rax_count = rax_structures.amount + self.already_pending(UnitTypeId.BARRACKS)
         if rax_count < 1 and self.can_afford(UnitTypeId.BARRACKS):
             pos = await self.find_safe_main_placement(UnitTypeId.BARRACKS, addon_place=True)
             if pos:
@@ -550,25 +648,38 @@ class CoachedTerranBot(BotAI):
                     self.do(worker.build(UnitTypeId.BARRACKS, pos), subtract_cost=True, ignore_warning=True)
 
         # 7. Bunker Defense: 언덕 입구 정중앙(barracks_in_middle)에 3x3 벙커 직접 배치하여 입구 완전 밀폐!
-        if self.strategy.build_bunker and rax_structures.amount >= 1:
+        if self.strategy.build_bunker and rax_count >= 1:
             bunker_count = (
                 self.structures(UnitTypeId.BUNKER).amount
                 + self.already_pending(UnitTypeId.BUNKER)
             )
-            # 1st Bunker: 입구 정중앙(barracks_in_middle)에 오차 없이 정확히 건설
-            if bunker_count < 1 and self.can_afford(UnitTypeId.BUNKER):
+            # 1st Bunker: 적 공격 위협이 있거나, 앞마당 CC 착공 후, 또는 자원 450+ 시 건설
+            # (적 위협이 없을 때는 1-Rax FE로 400 미네랄 CC를 먼저 짓고 바로 벙커 건설!)
+            ramp_threat = combat_enemies_near_base or any(
+                self.enemy_units.exclude_type(non_combat_scout_types).closer_than(25, ramp_choke)
+            )
+            can_build_first_bunker = (
+                ramp_threat
+                or pending_cc >= 1
+                or total_cc >= 2
+                or self.minerals >= 450
+                or self.time >= 150.0
+            )
+            if bunker_count < 1 and can_build_first_bunker and self.can_afford(UnitTypeId.BUNKER):
                 ramp_bunker_pos = self._safe_ramp_bunker_placement()
                 placed_bunker = False
-                if ramp_bunker_pos and await self.can_place_single(UnitTypeId.BUNKER, ramp_bunker_pos):
-                    worker = self.select_build_worker(ramp_bunker_pos)
-                    if worker:
-                        self.do(worker.build(UnitTypeId.BUNKER, ramp_bunker_pos), subtract_cost=True, ignore_warning=True)
-                        placed_bunker = True
+                if ramp_bunker_pos and not self.is_position_blocking_resources(ramp_bunker_pos, UnitTypeId.BUNKER):
+                    if await self.can_place_single(UnitTypeId.BUNKER, ramp_bunker_pos):
+                        worker = self.select_build_worker(ramp_bunker_pos)
+                        if worker:
+                            self.do(worker.build(UnitTypeId.BUNKER, ramp_bunker_pos), subtract_cost=True, ignore_warning=True)
+                            placed_bunker = True
                 
                 # Fallback: if exact position isn't available, build at top center
                 if not placed_bunker:
                     choke_bunker_pos = ramp_choke.towards(main_base.position, 2.0)
-                    await self.build(UnitTypeId.BUNKER, near=choke_bunker_pos)
+                    if not self.is_position_blocking_resources(choke_bunker_pos, UnitTypeId.BUNKER):
+                        await self.build(UnitTypeId.BUNKER, near=choke_bunker_pos)
 
             # 2nd Bunker: 앞마당 길목(2차 최전선)
             elif (
@@ -580,18 +691,31 @@ class CoachedTerranBot(BotAI):
                 if other_ccs:
                     nat_cc = other_ccs.first
                     nat_choke = nat_cc.position.towards(self.game_info.map_center, 8)
-                    await self.build(UnitTypeId.BUNKER, near=nat_choke)
+                    if not self.is_position_blocking_resources(nat_choke, UnitTypeId.BUNKER):
+                        await self.build(UnitTypeId.BUNKER, near=nat_choke)
 
         # 8. Additional Barracks (멀티 확보 및 자원 누적 시 최대 7~8병영까지 생산 인프라 확장)
+        # Base-proportional Barracks scaling:
+        # 1 base -> strictly 1 barracks (saving 400 minerals for fast natural expansion!)
+        # 2 bases -> up to 3 barracks (standard 3-1-1 macro production)
+        # 3 bases+ -> up to 5~8 barracks
         target_rax = self.strategy.target_barracks
         if total_cc >= 3 and self.minerals > 600:
             target_rax = min(8, self.strategy.target_barracks + 2)
 
+        if total_cc == 1:
+            max_allowed_rax = 1 if self.minerals < 500 else 2
+        elif total_cc == 2:
+            max_allowed_rax = 3 if self.minerals < 500 else target_rax
+        else:
+            max_allowed_rax = target_rax
+
         if (
             self.structures(UnitTypeId.BUNKER).amount + self.already_pending(UnitTypeId.BUNKER) >= 1
             or not self.strategy.build_bunker
+            or total_cc >= 2
         ):
-            if rax_count < target_rax and self.can_afford(UnitTypeId.BARRACKS):
+            if rax_count < max_allowed_rax and self.can_afford(UnitTypeId.BARRACKS):
                 pos = await self.find_safe_main_placement(UnitTypeId.BARRACKS, addon_place=True)
                 if pos:
                     worker = self.select_build_worker(pos)
@@ -618,13 +742,17 @@ class CoachedTerranBot(BotAI):
                 close_scvs.first(AbilityId.EFFECT_REPAIR, bld)
 
         # 8. Vespene Gas: Refineries for all ready Command Centers
-        if self.strategy.build_refinery and self.structures(UnitTypeId.BARRACKS).amount >= 1:
+        if self.strategy.build_refinery and rax_count >= 1:
             for cc in cc_list.ready:
                 for vespene in self.vespene_geyser.closer_than(15, cc):
                     if self.gas_buildings.closer_than(1.0, vespene):
                         continue
                     if self.already_pending(UnitTypeId.REFINERY) >= 1:
                         break
+                    # On 1-base, limit to 1 Refinery until Natural CC is started (saves 75 min + 3 SCVs on minerals)
+                    if total_cc == 1 and pending_cc == 0 and (self.gas_buildings.amount + self.already_pending(UnitTypeId.REFINERY)) >= 1:
+                        if self.minerals < 450:
+                            break
                     if self.can_afford(UnitTypeId.REFINERY):
                         worker = self.select_build_worker(vespene.position)
                         if worker:
@@ -656,15 +784,16 @@ class CoachedTerranBot(BotAI):
                         break
 
 
-        # 10. Factory (군수공장 2개 + 기술실) - 본진 내부 고지대에만 안전하게 건설
+        # 10. Factory (군수공장) - 본진 내부 고지대에만 안전하게 건설
         factory_count = (
             self.structures(UnitTypeId.FACTORY).amount
             + self.already_pending(UnitTypeId.FACTORY)
         )
+        max_allowed_factories = 1 if total_cc <= 2 else self.strategy.target_factories
         if (
             self.strategy.build_factory
             and self.structures(UnitTypeId.BARRACKS).ready
-            and factory_count < self.strategy.target_factories
+            and factory_count < max_allowed_factories
         ):
             if self.can_afford(UnitTypeId.FACTORY):
                 pos = await self.find_safe_main_placement(UnitTypeId.FACTORY, addon_place=True)
@@ -739,7 +868,16 @@ class CoachedTerranBot(BotAI):
                 self.structures(UnitTypeId.ENGINEERINGBAY).amount
                 + self.already_pending(UnitTypeId.ENGINEERINGBAY)
             )
-            needs_ebay = (len(bio_forces) >= 5 or self.strategy.build_missile_turrets or effective_weights.get("marine", 1.0) >= 0.9)
+            cloak_threat = any(u.is_cloaked for u in self.enemy_units)
+            # On 1 base, don't waste 125 minerals on Ebay before natural CC unless cloaked threat
+            needs_ebay = (
+                len(bio_forces) >= 5
+                or self.strategy.build_missile_turrets
+                or effective_weights.get("marine", 1.0) >= 0.9
+            )
+            if total_cc == 1 and pending_cc == 0 and not cloak_threat and self.minerals < 450:
+                needs_ebay = False
+
             if ebay_count < 1 and needs_ebay and self.structures(UnitTypeId.BARRACKS).ready and self.can_afford(UnitTypeId.ENGINEERINGBAY):
                 pos = await self.find_safe_main_placement(UnitTypeId.ENGINEERINGBAY)
                 if pos:
@@ -796,16 +934,17 @@ class CoachedTerranBot(BotAI):
                 target_turrets = 3 if (has_air_threat or total_cc >= 2) else 2
                 t_amount = turret_count + self.already_pending(UnitTypeId.MISSILETURRET)
                 if t_amount < target_turrets and self.can_afford(UnitTypeId.MISSILETURRET):
-                    if t_amount == 0:
-                        m_pos = main_base.position.towards(self.game_info.map_center, -4)
-                        await self.build(UnitTypeId.MISSILETURRET, near=m_pos)
-                    elif t_amount == 1 and other_ccs:
+                    if t_amount == 1 and other_ccs:
                         nat_cc = other_ccs.first
                         nat_turret_pos = nat_cc.position.towards(self.game_info.map_center, 7)
-                        await self.build(UnitTypeId.MISSILETURRET, near=nat_turret_pos)
-                    elif t_amount == 2:
-                        m_pos = main_base.position.towards(self.game_info.map_center, 6)
-                        await self.build(UnitTypeId.MISSILETURRET, near=m_pos)
+                        if not self.is_position_blocking_resources(nat_turret_pos, UnitTypeId.MISSILETURRET):
+                            await self.build(UnitTypeId.MISSILETURRET, near=nat_turret_pos)
+                    else:
+                        turret_pos = await self.find_safe_main_placement(UnitTypeId.MISSILETURRET)
+                        if turret_pos:
+                            worker = self.select_build_worker(turret_pos)
+                            if worker:
+                                self.do(worker.build(UnitTypeId.MISSILETURRET, turret_pos), subtract_cost=True, ignore_warning=True)
 
         # 13. Barracks Tech Lab Research: 보병 주력일 때 종족 맞춤형 순차 연구
         if len(bio_forces) >= 4:
@@ -1099,8 +1238,23 @@ class CoachedTerranBot(BotAI):
         # If Starport desperately needs to build the first medivac, don't let barracks steal the 100 minerals
         starport_waiting_for_medivac = (needs_medivac and self.structures(UnitTypeId.STARPORT).amount > 0 and medivac_count == 0)
 
+        # 1-Rax Fast Expand mineral accumulation:
+        # If saving for the 400 mineral natural CC, and we already have 1 reaper/marine for scouting/defense,
+        # pause queueing further marines when minerals >= 250 unless base is under combat attack!
+        saving_for_fast_natural = (
+            total_cc == 1
+            and pending_cc == 0
+            and rax_count >= 1
+            and (marine_count + reaper_count >= 1)
+            and self.minerals >= 250
+            and not combat_enemies_near_base
+        )
+
         for rax in self.structures(UnitTypeId.BARRACKS).ready.idle:
             if self.supply_left < 1:
+                break
+
+            if saving_for_fast_natural:
                 break
 
             if starport_waiting_for_medivac and self.minerals < 100 and self.vespene >= 100:
