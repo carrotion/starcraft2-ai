@@ -35,7 +35,7 @@
   "early_scout": true,
   "periodic_scan": true,
   "scan_interval_sec": 90.0,
-  "composition_focus": "adaptive",
+  "composition_focus": "mech_heavy",
   "train_marines": true,
   "train_reapers": true,
   "train_marauders": true,

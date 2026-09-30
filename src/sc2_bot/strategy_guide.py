@@ -83,7 +83,7 @@ class StrategyConfig:
     train_battlecruisers: bool = True    # 전투순양함
 
     # [7단계: 교전 및 전술]
-    attack_army_threshold: int = 28  # 탄탄한 화력 구축 후 진격 (종족별 최적화)
+    attack_army_threshold: int = 14  # 적극적이고 공격적인 진격 (기존 28 -> 14로 대폭 전진 배치)
     defend_base_on_attack: bool = True
 
 
@@ -108,7 +108,7 @@ def get_matchup_strategy(enemy_race: str) -> StrategyConfig:
             starport_techlab_target=1,  # 밤까마귀/밴시 + 바이킹
             priority_upgrade="concussive_first",
             ghost_priority=True,        # 토스 실드 파괴용 EMP 유령
-            attack_army_threshold=32,
+            attack_army_threshold=16,
             scan_interval_sec=80.0,
         )
 
@@ -125,7 +125,7 @@ def get_matchup_strategy(enemy_race: str) -> StrategyConfig:
             starport_techlab_target=0,  # 의료선 쾌속 수송 & 바이킹 지원
             priority_upgrade="stim_first",  # 저그전은 보병 기동성 & 화력 극대화(스팀팩) 최우선
             ghost_priority=False,
-            attack_army_threshold=28,
+            attack_army_threshold=12,
             scan_interval_sec=90.0,
         )
 
@@ -142,7 +142,7 @@ def get_matchup_strategy(enemy_race: str) -> StrategyConfig:
             starport_techlab_target=1,
             priority_upgrade="concussive_first",  # 불곰 충격탄 선행 (광전사/추적자 카이팅 핵심)
             ghost_priority=True,        # 프로토스 실드 50%를 일격에 날리고 스톰을 차단하는 EMP 유령 필수!
-            attack_army_threshold=30,
+            attack_army_threshold=14,
             scan_interval_sec=85.0,
         )
 
@@ -159,7 +159,7 @@ def get_matchup_strategy(enemy_race: str) -> StrategyConfig:
             starport_techlab_target=1,  # 밤까마귀(방해 매트릭스로 적 전차/토르/배틀 무력화)
             priority_upgrade="mech_balanced",  # 메카닉 공방업과 바이오닉 공방업 균형
             ghost_priority=False,
-            attack_army_threshold=28,
+            attack_army_threshold=14,
             scan_interval_sec=80.0,
         )
 
@@ -175,7 +175,7 @@ def get_matchup_strategy(enemy_race: str) -> StrategyConfig:
         starport_techlab_target=1,
         priority_upgrade="balanced",
         ghost_priority=False,
-        attack_army_threshold=28,
+        attack_army_threshold=14,
         scan_interval_sec=90.0,
     )
 

@@ -61,6 +61,10 @@ class CoachedTerranBot(BotAI):
         # Fast Expansion SCV pre-dispatch
         self.fast_expand_scv_tag: Optional[int] = None
 
+        # Aggressive Attack & Harassment State Machine
+        self.is_attacking: bool = False
+        self.attack_start_time: float = 0.0
+
 
 
     def _safe_corner_depots(self) -> List[Point2]:
@@ -1322,16 +1326,17 @@ class CoachedTerranBot(BotAI):
             + len(medivacs) + len(vikings) + len(liberators) + len(ravens) + len(banshees) + len(battlecruisers)
         )
 
-        # Determine Active Frontline Defense Anchor (앞마당 기지가 있으면 앞마당이 전선 집결지!)
+        # Determine Active Frontline Staging & Forward Rally Point
+        # Forward posture: When natural CC exists, stage forward towards the map center/choke
         bunkers = self.structures(UnitTypeId.BUNKER).ready
-        if other_ccs and bunkers:
+        if other_ccs:
             nat_cc = other_ccs.first
-            frontline_bunker = bunkers.closest_to(nat_cc)
-            rally_point = frontline_bunker.position.towards(nat_cc.position, 3.5)
+            # Push forward: rally 7 tiles ahead of natural CC towards the map center!
+            rally_point = nat_cc.position.towards(self.game_info.map_center, 7.0)
         elif bunkers:
-            rally_point = bunkers.first.position.towards(main_base.position, 3.5)
+            rally_point = bunkers.first.position.towards(self.game_info.map_center, 3.0)
         else:
-            rally_point = ramp_choke.towards(main_base.position, 3.5)
+            rally_point = ramp_choke.towards(self.game_info.map_center, 2.0)
 
         # Smart Production Rally: Direct newly produced units immediately towards the open frontline
         for pb in self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).ready:
@@ -1378,38 +1383,112 @@ class CoachedTerranBot(BotAI):
         enemy_units = self.enemy_units
         enemy_structures = self.enemy_structures
 
-        if enemy_structures:
+        # Smart Dynamic Target Selection:
+        # Prioritize enemy townhalls and key production structures over peripheral pylons/depots
+        enemy_townhalls = enemy_structures.filter(lambda s: s.type_id in {
+            UnitTypeId.NEXUS, UnitTypeId.COMMANDCENTER, UnitTypeId.ORBITALCOMMAND, UnitTypeId.PLANETARYFORTRESS,
+            UnitTypeId.HATCHERY, UnitTypeId.LAIR, UnitTypeId.HIVE
+        })
+        enemy_production = enemy_structures.filter(lambda s: s.type_id in {
+            UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT,
+            UnitTypeId.GATEWAY, UnitTypeId.WARPGATE, UnitTypeId.ROBOTICSFACILITY, UnitTypeId.STARGATE,
+            UnitTypeId.SPAWNINGPOOL, UnitTypeId.ROACHWARREN, UnitTypeId.HYDRALISKDEN, UnitTypeId.SPIRE
+        })
+
+        if enemy_townhalls:
+            target_pos = enemy_townhalls.closest_to(main_base).position
+        elif enemy_production:
+            target_pos = enemy_production.closest_to(main_base).position
+        elif enemy_structures:
             target_pos = enemy_structures.closest_to(main_base).position
         elif self.enemy_start_locations:
-            target_pos = self.enemy_start_locations[0]
+            enemy_main = self.enemy_start_locations[0]
+            enemy_nat = enemy_main.towards(self.game_info.map_center, 12.0)
+            target_pos = enemy_nat if self.time < 420.0 else enemy_main
         else:
             target_pos = self.game_info.map_center
 
-        # Detect any enemies threatening our bases
-        enemies_near_base = enemy_units.closer_than(24, main_base)
-        if other_ccs:
-            enemies_near_base = enemies_near_base | enemy_units.closer_than(24, other_ccs.first)
+        # Harassment target for early Reapers and stealth Banshees (enemy mineral line)
+        if self.enemy_start_locations:
+            enemy_main = self.enemy_start_locations[0]
+            enemy_nat = enemy_main.towards(self.game_info.map_center, 12.0)
+            harass_target = enemy_nat if self.time < 360.0 else enemy_main
+        else:
+            harass_target = target_pos
 
-        if self.strategy.defend_base_on_attack and enemies_near_base:
-            # Defend base immediately with all arms
-            def_target = enemies_near_base.closest_to(main_base).position
-            self.micro.micro_bio(bio, enemy_units, def_target)
-            self.micro.micro_reapers(reapers, enemy_units, def_target, bio_center)
-            self.micro.micro_ghosts(ghosts, enemy_units, def_target, bio_center)
-            self.micro.micro_tanks(mobile_tanks, sieged_tanks, enemy_units, def_target, bio_center)
-            self.micro.micro_hellbats(hellbats, enemy_units, def_target, bio_center)
-            self.micro.micro_hellions(hellions, enemy_units, def_target, bio_center)
-            self.micro.micro_widowmines(widowmines, enemy_units, def_target, bio_center)
-            self.micro.micro_cyclones(cyclones, enemy_units, def_target, bio_center)
-            self.micro.micro_thors(thors, enemy_units, def_target, bio_center)
-            self.micro.micro_medivacs(medivacs, bio, bio_center)
-            self.micro.micro_vikings(vikings, enemy_units, def_target, bio_center)
-            self.micro.micro_liberators(liberators, enemy_units, def_target, bio_center)
-            self.micro.micro_ravens(ravens, enemy_units, def_target, bio_center)
-            self.micro.micro_banshees(banshees, enemy_units, def_target, bio_center)
-            self.micro.micro_battlecruisers(battlecruisers, enemy_units, def_target)
-        elif total_combat_army >= self.strategy.attack_army_threshold:
-            # Full Combined Arms Assault Push!
+        # Filter genuine combat threats threatening our bases (ignore worker scouts & overlords)
+        non_combat_scout_types = {
+            UnitTypeId.SCV, UnitTypeId.PROBE, UnitTypeId.DRONE,
+            UnitTypeId.OVERLORD, UnitTypeId.OVERLORDCOCOON,
+            UnitTypeId.CHANGELING, UnitTypeId.CHANGELINGMARINESHIELD,
+            UnitTypeId.CHANGELINGMARINE, UnitTypeId.CHANGELINGZEALOT, UnitTypeId.CHANGELINGZERGLING,
+            UnitTypeId.LARVA, UnitTypeId.EGG
+        }
+        combat_enemies = enemy_units.exclude_type(non_combat_scout_types)
+        combat_threats_near_base = combat_enemies.closer_than(20, main_base)
+        if other_ccs:
+            combat_threats_near_base = combat_threats_near_base | combat_enemies.closer_than(20, other_ccs.first)
+
+        # Proactive Aggressive Attack Decision Engine
+        # 1. Standard attack threshold reached (12~14 units)
+        # 2. Army supply >= 20
+        # 3. Early timing power-spike: 4분 20초+ 경과, 전차/의료선/사이클론/토르 포함 병력 10기 이상!
+        # 4. 6분 경과 시 병력 12기 이상이면 지체 없이 진격!
+        has_power_unit = (len(tanks) >= 1 or len(medivacs) >= 1 or len(cyclones) >= 2 or len(thors) >= 1)
+        timing_attack_ready = (self.time >= 260.0 and total_combat_army >= 10 and has_power_unit)
+        midgame_push_ready = (self.time >= 360.0 and total_combat_army >= 12)
+        threshold_met = (total_combat_army >= self.strategy.attack_army_threshold or self.supply_army >= 20)
+
+        should_start_attack = (threshold_met or timing_attack_ready or midgame_push_ready)
+
+        if should_start_attack and not self.is_attacking:
+            self.is_attacking = True
+            self.attack_start_time = self.time
+            self.telemetry.log_event(
+                f"⚔️ [맹공격 개시] 지상·공중 화력 {total_combat_army}기 (인구수 {self.supply_army}) 전격 총공격 개시!",
+                "attack"
+            )
+
+        # Disengage only if army was almost completely wiped out (total_combat_army < 5)
+        # OR our base is under massive invasion by 5+ enemy combat units while our attacking army is small
+        if self.is_attacking:
+            if total_combat_army < 5 and self.supply_army < 8:
+                self.is_attacking = False
+                self.telemetry.log_event("🛡️ [전선 재정비] 아군 잔여 화력 보충을 위해 본진 방어선 재정비", "retreat")
+            elif combat_threats_near_base.amount >= 5 and total_combat_army < 14:
+                self.is_attacking = False
+
+        # Determine current execution posture
+        if self.strategy.defend_base_on_attack and combat_threats_near_base:
+            # If attacking and it's just a small nuisance (1~3 enemies), don't turn entire army around!
+            # Only full retreat if threat is significant (4+ units) or we are not in attack mode
+            if not self.is_attacking or combat_threats_near_base.amount >= 4:
+                def_target = combat_threats_near_base.closest_to(main_base).position
+                self.micro.micro_bio(bio, enemy_units, def_target)
+                self.micro.micro_reapers(reapers, enemy_units, def_target, bio_center)
+                self.micro.micro_ghosts(ghosts, enemy_units, def_target, bio_center)
+                self.micro.micro_tanks(mobile_tanks, sieged_tanks, enemy_units, def_target, bio_center)
+                self.micro.micro_hellbats(hellbats, enemy_units, def_target, bio_center)
+                self.micro.micro_hellions(hellions, enemy_units, def_target, bio_center)
+                self.micro.micro_widowmines(widowmines, enemy_units, def_target, bio_center)
+                self.micro.micro_cyclones(cyclones, enemy_units, def_target, bio_center)
+                self.micro.micro_thors(thors, enemy_units, def_target, bio_center)
+                self.micro.micro_medivacs(medivacs, bio, bio_center)
+                self.micro.micro_vikings(vikings, enemy_units, def_target, bio_center)
+                self.micro.micro_liberators(liberators, enemy_units, def_target, bio_center)
+                self.micro.micro_ravens(ravens, enemy_units, def_target, bio_center)
+                self.micro.micro_banshees(banshees, enemy_units, def_target, bio_center)
+                self.micro.micro_battlecruisers(battlecruisers, enemy_units, def_target)
+                exec_state = "defense"
+            else:
+                exec_state = "attack"
+        elif self.is_attacking:
+            exec_state = "attack"
+        else:
+            exec_state = "anchor"
+
+        if exec_state == "attack":
+            # Full Relentless Combined Arms Assault Push!
             self.micro.micro_bio(bio, enemy_units, target_pos)
             self.micro.micro_reapers(reapers, enemy_units, target_pos, bio_center)
             self.micro.micro_ghosts(ghosts, enemy_units, target_pos, bio_center)
@@ -1425,10 +1504,14 @@ class CoachedTerranBot(BotAI):
             self.micro.micro_ravens(ravens, enemy_units, target_pos, bio_center)
             self.micro.micro_banshees(banshees, enemy_units, target_pos, bio_center)
             self.micro.micro_battlecruisers(battlecruisers, enemy_units, target_pos)
-        else:
-            # Defense Anchor Mode:
+        elif exec_state == "anchor":
+            # Active Forward Staging & Harassment Mode:
+            # Reapers and Banshees proactively raid enemy positions even when main army is staging!
+            self.micro.micro_reapers(reapers, enemy_units, harass_target, bio_center)
+            self.micro.micro_banshees(banshees, enemy_units, harass_target, bio_center)
+
+            # Main Ground Forces hold forward staging line
             self.micro.micro_bio(bio, enemy_units, rally_point)
-            self.micro.micro_reapers(reapers, enemy_units, rally_point, rally_point)
             self.micro.micro_ghosts(ghosts, enemy_units, rally_point, rally_point)
             self.micro.micro_defense_tanks(mobile_tanks, sieged_tanks, enemy_units, rally_point)
             self.micro.micro_hellbats(hellbats, enemy_units, rally_point, rally_point)
@@ -1440,17 +1523,18 @@ class CoachedTerranBot(BotAI):
             self.micro.micro_vikings(vikings, enemy_units, rally_point, rally_point)
             self.micro.micro_liberators(liberators, enemy_units, rally_point, rally_point)
             self.micro.micro_ravens(ravens, enemy_units, rally_point, rally_point)
-            self.micro.micro_banshees(banshees, enemy_units, rally_point, rally_point)
             self.micro.micro_battlecruisers(battlecruisers, enemy_units, rally_point)
 
         # 16. Live brief in console
         now = time.time()
-        if total_combat_army >= self.strategy.attack_army_threshold:
-            status = "풀업 대군 총공격 중!"
+        if self.is_attacking:
+            status = f"🔥 [전면 맹공격] 적진 파괴 진격 중! (화력:{total_combat_army} 인구:{self.supply_army})"
+        elif total_combat_army >= 8:
+            status = f"⚔️ 전방 전선 장악 및 출격 대기 (화력:{total_combat_army}/{self.strategy.attack_army_threshold})"
         elif cc_list.amount >= 3:
             status = f"제{cc_list.amount}기지 확장 및 거점 수비 중"
         elif total_cc >= 2:
-            status = "앞마당 철벽 방어선 구축 중"
+            status = "앞마당 고속 활성화 및 병력 집결"
         else:
             status = "본진 방어선 및 기반 구축"
 

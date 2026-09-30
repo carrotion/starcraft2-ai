@@ -80,11 +80,17 @@ class TerranMicroController:
                     or (getattr(e, "can_attack_ground", False) and getattr(e, "ground_range", 10) <= 1.5)
                 )
 
-                # 3. Kiting: If melee enemy is closer than learned kiting_distance, step backward
-                if melee_enemies and melee_enemies.closest_to(unit).distance_to(unit) < kiting_dist:
-                    retreat_pos = unit.position.towards(base_pos, kiting_dist * 0.75)
-                    unit.move(retreat_pos)
-                    continue
+                # 3. True Pro Stutter-Step Kiting: If weapon is ready, FIRE! If on cooldown and enemy is too close, step back!
+                if melee_enemies:
+                    closest_melee = melee_enemies.closest_to(unit)
+                    if closest_melee.distance_to(unit) < kiting_dist:
+                        if getattr(unit, "weapon_cooldown", 0) > 0:
+                            retreat_pos = unit.position.towards(base_pos, kiting_dist * 0.75)
+                            unit.move(retreat_pos)
+                            continue
+                        else:
+                            unit.attack(closest_melee)
+                            continue
 
                 # 4. Focus fire (프로들의 칼 1점사): Target enemy with lowest health within range
                 enemies_in_range = nearby_enemies.closer_than(6.0, unit)
@@ -229,23 +235,35 @@ class TerranMicroController:
                     bc.attack(target_position)
 
     def micro_reapers(self, reapers, enemies, target_position: Point2, bio_center: Point2):
-        """Micro for Reapers: KD8 grenade knockback & mobile hit-and-run kiting."""
+        """Micro for Reapers: KD8 grenade knockback, worker hunting & mobile hit-and-run kiting."""
         policy = self.get_policy()
         kiting_dist = policy.get("kiting_distance", 3.2)
 
         for reaper in reapers:
-            nearby = enemies.closer_than(7.0, reaper)
+            # If health is low, temporarily step back to trigger out-of-combat regeneration
+            if reaper.health < reaper.health_max * 0.45:
+                retreat_pos = reaper.position.towards(self.bot.start_location, 5.0)
+                reaper.move(retreat_pos)
+                continue
+
+            nearby = enemies.closer_than(8.0, reaper)
             if nearby:
                 available = getattr(reaper, "abilities", set()) or set()
+                workers_near = nearby.filter(lambda e: e.is_worker)
+
                 if AbilityId.KD8CHARGE_KD8CHARGE in available and reaper.distance_to(nearby.first) < 5.0:
                     reaper(AbilityId.KD8CHARGE_KD8CHARGE, nearby.first.position)
+                elif getattr(reaper, "weapon_cooldown", 0) == 0:
+                    if workers_near:
+                        reaper.attack(workers_near.closest_to(reaper))
+                    else:
+                        reaper.attack(nearby.closest_to(reaper))
                 elif nearby.closest_to(reaper).distance_to(reaper) < kiting_dist:
                     reaper.move(reaper.position.towards(self.bot.start_location, kiting_dist * 0.75))
                 else:
                     reaper.attack(nearby.closest_to(reaper))
             else:
-                if reaper.is_idle:
-                    reaper.attack(bio_center if bio_center else target_position)
+                reaper.attack(target_position)
 
     def micro_ghosts(self, ghosts, enemies, target_position: Point2, bio_center: Point2):
         """Micro for Ghosts: EMP shockwave against shields/energy, Snipe on high-HP biological."""
@@ -351,15 +369,17 @@ class TerranMicroController:
                 raven.move(self.bot.start_location)
 
     def micro_banshees(self, banshees, enemies, target_position: Point2, bio_center: Point2):
-        """Micro for Banshees: Cloak when threatened, ground strafing."""
+        """Micro for Banshees: Cloak when threatened, ground strafing and worker hunting."""
         for banshee in banshees:
             nearby = enemies.closer_than(9.0, banshee)
             if nearby:
-                if banshee.health < banshee.health_max * 0.9:
-                    available = getattr(banshee, "abilities", set()) or set()
-                    if AbilityId.BEHAVIOR_CLOAKON_BANSHEE in available and banshee.energy >= 25:
-                        banshee(AbilityId.BEHAVIOR_CLOAKON_BANSHEE)
-                banshee.attack(nearby.closest_to(banshee))
+                available = getattr(banshee, "abilities", set()) or set()
+                if AbilityId.BEHAVIOR_CLOAKON_BANSHEE in available and banshee.energy >= 25 and not banshee.is_cloaked:
+                    banshee(AbilityId.BEHAVIOR_CLOAKON_BANSHEE)
+                workers_near = nearby.filter(lambda e: e.is_worker)
+                if workers_near:
+                    banshee.attack(workers_near.closest_to(banshee))
+                else:
+                    banshee.attack(nearby.closest_to(banshee))
             else:
-                if banshee.is_idle:
-                    banshee.attack(bio_center if bio_center else target_position)
+                banshee.attack(target_position)
