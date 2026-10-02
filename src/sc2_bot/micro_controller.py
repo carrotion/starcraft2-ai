@@ -127,19 +127,27 @@ class TerranMicroController:
                 tank(AbilityId.UNSIEGE_UNSIEGE)
 
     def micro_defense_tanks(self, mobile_tanks, sieged_tanks, enemies, rally_position: Point2):
-        """Anchor defense for Siege Tanks: Secure the choke point in Siege Mode."""
+        """Anchor defense for Siege Tanks: Secure the choke point in Siege Mode while never blocking the ramp choke."""
         policy = self.get_policy()
         siege_range = policy.get("tank_siege_range", 12.5)
 
+        ramp = getattr(self.bot, "main_base_ramp", None)
+        ramp_pos = ramp.top_center if ramp else None
+
         for tank in mobile_tanks:
+            in_ramp_choke = (ramp_pos is not None and tank.distance_to(ramp_pos) < 4.2)
             enemies_in_range = enemies.closer_than(siege_range, tank)
-            if enemies_in_range or tank.distance_to(rally_position) < 8.0:
+            if not in_ramp_choke and (enemies_in_range or tank.distance_to(rally_position) < 7.0):
                 tank(AbilityId.SIEGEMODE_SIEGEMODE)
             else:
                 tank.move(rally_position)
 
         for tank in sieged_tanks:
-            if tank.distance_to(rally_position) > 16.0 and not enemies.closer_than(siege_range + 1.5, tank):
+            in_ramp_choke = (ramp_pos is not None and tank.distance_to(ramp_pos) < 4.2)
+            if in_ramp_choke:
+                # 입구를 막고 시즈 모드 중이면 즉시 시즈 해제하여 아군 유닛 통로 확보
+                tank(AbilityId.UNSIEGE_UNSIEGE)
+            elif tank.distance_to(rally_position) > 16.0 and not enemies.closer_than(siege_range + 1.5, tank):
                 tank(AbilityId.UNSIEGE_UNSIEGE)
 
     def micro_medivacs(self, medivacs, bio_units, bio_center: Point2):

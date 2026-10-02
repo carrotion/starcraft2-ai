@@ -77,10 +77,16 @@ class CoachedTerranBot(BotAI):
         return []
 
     def _safe_ramp_bunker_placement(self) -> Optional[Point2]:
-        """Safely retrieves the exact 3x3 choke wall position for Bunker in the middle of ramp."""
+        """언덕 입구의 통행로를 절대 막지 않도록, 램프 초크에서 본진 안쪽으로 4.5타일 이상 물러난 측면 위치에 안전하게 벙커를 배치합니다."""
         try:
-            if self.main_base_ramp and self.main_base_ramp.barracks_in_middle:
-                return self.main_base_ramp.barracks_in_middle
+            if not self.townhalls:
+                return None
+            main_base = self.townhalls.first
+            ramp_choke = self._safe_ramp_top_center(main_base.position)
+            choke_to_base = (main_base.position - ramp_choke).normalized
+            perp = Point2((-choke_to_base.y, choke_to_base.x))
+            # 램프 중앙 통로를 온전히 비워두기 위해 본진 방향 4.8타일, 측면 2.8타일 오프셋
+            return ramp_choke + choke_to_base * 4.8 + perp * 2.8
         except Exception:
             pass
         return None
@@ -153,6 +159,95 @@ class CoachedTerranBot(BotAI):
 
         return False
 
+    async def _is_placement_safe(
+        self,
+        pos: Point2,
+        building: UnitTypeId,
+        addon_place: bool,
+        base_h: float,
+        ramp_choke: Point2,
+        ramp_bunker: Optional[Point2] = None,
+    ) -> bool:
+        """Thoroughly validates that building placement provides wide pathways (>= 2.8 tiles) for Tanks and Thors,
+        does not block doorways or resource mining lines, and stays away from the ramp choke."""
+        if not pos:
+            return False
+
+        # 0. STRICT: Must NOT block resources or mining corridors
+        if self.is_position_blocking_resources(pos, building):
+            return False
+
+        # 1. Height must strictly match main base high ground (NEVER build down below on natural)
+        if self.get_terrain_height(pos) != base_h:
+            return False
+
+        # 2. Must not crowd or block the ramp choke (keep ramp 100% wide open for army exit)
+        if pos.distance_to(ramp_choke) < 5.8:
+            return False
+        if ramp_bunker and pos.distance_to(ramp_bunker) < 4.8:
+            return False
+
+        # 3. If add-on required, double check that the right-side slot is completely free and on high ground!
+        if addon_place:
+            addon_pos = pos.offset((2.5, -0.5))
+            if self.get_terrain_height(addon_pos) != base_h:
+                return False
+            if self.is_position_blocking_resources(addon_pos, building):
+                return False
+            if not await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_pos):
+                return False
+            if self.structures.closer_than(2.5, addon_pos):
+                return False
+
+        # 4. Wide Walkway Clearance & Doorway Protection
+        # SC2 Unit Collision Sizes: Thor diameter = 2.5 tiles, Siege Tank diameter = 2.0 tiles.
+        # Center-to-center distance >= 5.8 tiles guarantees at least a 2.8 tile walkway between 3x3 structures!
+        is_large_structure = building in {
+            UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT,
+            UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY, UnitTypeId.FUSIONCORE,
+            UnitTypeId.GHOSTACADEMY, UnitTypeId.COMMANDCENTER
+        }
+        all_heavy_structures = self.structures.filter(
+            lambda s: s.type_id in {
+                UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT,
+                UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY, UnitTypeId.FUSIONCORE,
+                UnitTypeId.GHOSTACADEMY, UnitTypeId.COMMANDCENTER
+            }
+        )
+
+        if is_large_structure:
+            min_dist = 6.4 if addon_place else 5.8
+            if any(s.distance_to(pos) < min_dist for s in all_heavy_structures):
+                return False
+
+            # Doorway Protection: Ensure new building doesn't block the spawn exit of existing production buildings
+            production_blds = self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT})
+            for pb in production_blds:
+                pb_exit = pb.position.offset((0, -2.5))
+                if pos.distance_to(pb_exit) < 3.2:
+                    return False
+
+            # Also ensure this new building's own spawn exit is clear of existing structures
+            if building in {UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}:
+                my_exit = pos.offset((0, -2.5))
+                if self.structures.closer_than(2.8, my_exit):
+                    return False
+
+        elif building == UnitTypeId.SUPPLYDEPOT:
+            # Depots should not crowd production buildings or their spawn doorways
+            production_blds = self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT})
+            if any(pb.distance_to(pos) < 4.2 for pb in production_blds):
+                return False
+            for pb in production_blds:
+                pb_exit = pb.position.offset((0, -2.5))
+                if pos.distance_to(pb_exit) < 3.0:
+                    return False
+            # Depots must not crowd townhalls (leave space around CC)
+            if any(th.distance_to(pos) < 4.0 for th in self.townhalls):
+                return False
+
+        return True
+
     async def find_safe_main_placement(self, building: UnitTypeId, addon_place: bool = False) -> Optional[Point2]:
         """Finds a safe building placement strictly on the main base high ground, avoiding mining lines and reserving space for add-on if requested."""
         if not self.townhalls:
@@ -169,7 +264,6 @@ class CoachedTerranBot(BotAI):
             avg_m_y = sum(m.position.y for m in local_minerals) / len(local_minerals)
             res_center = Point2((avg_m_x, avg_m_y))
             res_dir = (res_center - main_base.position).normalized
-            # open_dir points directly away from the mineral line into the safe open yard
             open_dir = -res_dir
         else:
             diff = main_base.position - ramp_choke
@@ -185,15 +279,16 @@ class CoachedTerranBot(BotAI):
             main_base.position + open_dir * 4.0 - perp_dir * 5.0,
             main_base.position + perp_dir * 6.0,
             main_base.position - perp_dir * 6.0,
-            ramp_choke - ramp_dir * 4.0,
+            ramp_choke - ramp_dir * 5.0,
             main_base.position + open_dir * 11.0,
             main_base.position + perp_dir * 9.0,
             main_base.position - perp_dir * 9.0,
+            main_base.position + open_dir * 14.0,
         ]
 
         map_w = self.game_info.map_size[0]
         max_dist = 18 if map_w > 70 else 10
-        fallback_dist = 24 if map_w > 70 else 12
+        fallback_dist = 24 if map_w > 70 else 14
 
         for seed in seeds:
             pos = await self.find_placement(
@@ -204,68 +299,23 @@ class CoachedTerranBot(BotAI):
                 placement_step=1,
                 addon_place=addon_place,
             )
-            if pos:
-                # 0. STRICT: Must NOT block resources or mining corridors
-                if self.is_position_blocking_resources(pos, building):
-                    continue
-
-                # 1. Height must strictly match main base high ground (NEVER build down below on natural)
-                if self.get_terrain_height(pos) != base_h:
-                    continue
-                # 2. Must not crowd or block the ramp choke wall (keep ramp open for army exit)
-                if pos.distance_to(ramp_choke) < 6.0:
-                    continue
-                if ramp_bunker and pos.distance_to(ramp_bunker) < 4.5:
-                    continue
-
-                # 3. If add-on required, double check that the right-side slot is completely free and on high ground!
-                if addon_place:
-                    addon_pos = pos.offset((2.5, -0.5))
-                    if self.get_terrain_height(addon_pos) != base_h:
-                        continue
-                    if self.is_position_blocking_resources(addon_pos, building):
-                        continue
-                    if not await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_pos):
-                        continue
-
-                # 4. Clearance Aisles: Ensure production & tech buildings do not clump with distance < 4.2
-                # Center-to-center distance >= 4.2 guarantees at least a 1.2~1.5 tile walkway for Tanks, Thors, and Bio
-                if building in {UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT, UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY}:
-                    clumping = self.structures.filter(
-                        lambda s: s.type_id in {
-                            UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT,
-                            UnitTypeId.ENGINEERINGBAY, UnitTypeId.ARMORY, UnitTypeId.COMMANDCENTER
-                        } and s.distance_to(pos) < 4.3
-                    )
-                    if clumping:
-                        continue
-                elif building == UnitTypeId.SUPPLYDEPOT:
-                    # Depots should not block production building doorways
-                    if self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).closer_than(3.2, pos):
-                        continue
-
+            if pos and await self._is_placement_safe(pos, building, addon_place, base_h, ramp_choke, ramp_bunker):
                 return pos
 
-        # Fallback: strictly check height around main base with addon_place and resource check
-        fallback_pos = await self.find_placement(
-            building,
-            near=main_base.position + open_dir * 6.0,
-            max_distance=fallback_dist,
-            random_alternative=True,
-            addon_place=addon_place,
-        )
-        if fallback_pos and self.get_terrain_height(fallback_pos) == base_h:
-            if not self.is_position_blocking_resources(fallback_pos, building):
-                if addon_place:
-                    addon_pos = fallback_pos.offset((2.5, -0.5))
-                    if (
-                        self.get_terrain_height(addon_pos) == base_h
-                        and not self.is_position_blocking_resources(addon_pos, building)
-                        and await self.can_place_single(UnitTypeId.SUPPLYDEPOT, addon_pos)
-                    ):
-                        return fallback_pos
-                else:
-                    return fallback_pos
+        # Fallback: search safely around open yard without ever compromising walkway clearance
+        for dist_step in range(6, fallback_dist + 1, 3):
+            fallback_seed = main_base.position + open_dir * dist_step
+            fallback_pos = await self.find_placement(
+                building,
+                near=fallback_seed,
+                max_distance=7,
+                random_alternative=True,
+                placement_step=1,
+                addon_place=addon_place,
+            )
+            if fallback_pos and await self._is_placement_safe(fallback_pos, building, addon_place, base_h, ramp_choke, ramp_bunker):
+                return fallback_pos
+
         return None
 
 
@@ -633,14 +683,38 @@ class CoachedTerranBot(BotAI):
                         if worker:
                             self.do(worker.build(UnitTypeId.SUPPLYDEPOT, pos), subtract_cost=True, ignore_warning=True)
 
-        # Smart Gate: Raise if enemies approach ramp choke; otherwise keep lowered for unit flow
-        enemies_near_ramp = self.enemy_units.closer_than(16, ramp_choke)
-        if enemies_near_ramp:
-            for depot in self.structures(UnitTypeId.SUPPLYDEPOTLOWERED):
-                if depot.distance_to(ramp_choke) < 7:
-                    depot(AbilityId.MORPH_SUPPLYDEPOT_RAISE)
+        # --- Smart Gate System (스마트 자동문 시스템) ---
+        # 1. 본진 내부 보급고(거리 >= 7.0)는 유닛 통행을 위해 무조건 항상 내림(LOWER) 유지!
+        for depot in self.structures(UnitTypeId.SUPPLYDEPOT).ready:
+            if depot.distance_to(ramp_choke) >= 7.0:
+                depot(AbilityId.MORPH_SUPPLYDEPOT_LOWER)
+
+        # 2. 언덕 입구 보급고(거리 < 7.0) 스마트 개폐 제어:
+        # - 아군이 진출/공격 중(self.is_attacking)이거나, 아군 지상 유닛(병력/일꾼)이 입구 근처(4.5타일 이내)에 있으면 즉시 내림(LOWER)!
+        # - 순수 적 지상 전투 유닛이 입구 8.5타일 이내로 접근하고 + 입구 근처에 통과하려는 아군이 없을 때만 방어용으로 올림(RAISE)!
+        ramp_depots_lowered = self.structures(UnitTypeId.SUPPLYDEPOTLOWERED).filter(lambda d: d.distance_to(ramp_choke) < 7.0)
+        ramp_depots_raised = self.structures(UnitTypeId.SUPPLYDEPOT).ready.filter(lambda d: d.distance_to(ramp_choke) < 7.0)
+
+        dangerous_enemy_ground = self.enemy_units.filter(
+            lambda u: not u.is_flying
+            and u.type_id not in non_combat_scout_types
+            and (u.can_attack_ground or u.type_id in {UnitTypeId.BANELING, UnitTypeId.ZERGLING, UnitTypeId.ZEALOT})
+            and u.distance_to(ramp_choke) < 8.5
+        )
+
+        friendly_units_passing = self.units.filter(
+            lambda u: not u.is_flying
+            and u.type_id != UnitTypeId.MULE
+            and u.distance_to(ramp_choke) < 4.5
+        )
+
+        should_raise_gate = bool(dangerous_enemy_ground) and not self.is_attacking and not friendly_units_passing
+
+        if should_raise_gate:
+            for depot in ramp_depots_lowered:
+                depot(AbilityId.MORPH_SUPPLYDEPOT_RAISE)
         else:
-            for depot in self.structures(UnitTypeId.SUPPLYDEPOT).ready:
+            for depot in ramp_depots_raised:
                 depot(AbilityId.MORPH_SUPPLYDEPOT_LOWER)
 
         # 6. First Barracks (병영 1개 - 본진 내부 고지대에 부속 건물 공간을 확보하여 안전하게 건설)
@@ -651,7 +725,7 @@ class CoachedTerranBot(BotAI):
                 if worker:
                     self.do(worker.build(UnitTypeId.BARRACKS, pos), subtract_cost=True, ignore_warning=True)
 
-        # 7. Bunker Defense: 언덕 입구 정중앙(barracks_in_middle)에 3x3 벙커 직접 배치하여 입구 완전 밀폐!
+        # 7. Bunker Defense: 본진 언덕 통로를 절대 막지 않도록 후방 측면에 안전하게 배치
         if self.strategy.build_bunker and rax_count >= 1:
             bunker_count = (
                 self.structures(UnitTypeId.BUNKER).amount
@@ -673,17 +747,31 @@ class CoachedTerranBot(BotAI):
                 ramp_bunker_pos = self._safe_ramp_bunker_placement()
                 placed_bunker = False
                 if ramp_bunker_pos and not self.is_position_blocking_resources(ramp_bunker_pos, UnitTypeId.BUNKER):
-                    if await self.can_place_single(UnitTypeId.BUNKER, ramp_bunker_pos):
-                        worker = self.select_build_worker(ramp_bunker_pos)
-                        if worker:
-                            self.do(worker.build(UnitTypeId.BUNKER, ramp_bunker_pos), subtract_cost=True, ignore_warning=True)
-                            placed_bunker = True
-                
-                # Fallback: if exact position isn't available, build at top center
+                    target_bunker_pos = await self.find_placement(UnitTypeId.BUNKER, near=ramp_bunker_pos, max_distance=4, placement_step=1)
+                    if (
+                        target_bunker_pos
+                        and target_bunker_pos.distance_to(ramp_choke) >= 4.0
+                        and not self.is_position_blocking_resources(target_bunker_pos, UnitTypeId.BUNKER)
+                    ):
+                        if await self.can_place_single(UnitTypeId.BUNKER, target_bunker_pos):
+                            worker = self.select_build_worker(target_bunker_pos)
+                            if worker:
+                                self.do(worker.build(UnitTypeId.BUNKER, target_bunker_pos), subtract_cost=True, ignore_warning=True)
+                                placed_bunker = True
+
+                # Safe Fallback: 본진 안쪽으로 최소 5.5타일 물러선 위치에 건설 (램프 입구 절대 차단 방지)
                 if not placed_bunker:
-                    choke_bunker_pos = ramp_choke.towards(main_base.position, 2.0)
-                    if not self.is_position_blocking_resources(choke_bunker_pos, UnitTypeId.BUNKER):
-                        await self.build(UnitTypeId.BUNKER, near=choke_bunker_pos)
+                    safe_fallback = ramp_choke.towards(main_base.position, 5.5)
+                    if not self.is_position_blocking_resources(safe_fallback, UnitTypeId.BUNKER):
+                        target_bunker_pos = await self.find_placement(UnitTypeId.BUNKER, near=safe_fallback, max_distance=4, placement_step=1)
+                        if (
+                            target_bunker_pos
+                            and target_bunker_pos.distance_to(ramp_choke) >= 4.0
+                            and not self.is_position_blocking_resources(target_bunker_pos, UnitTypeId.BUNKER)
+                        ):
+                            worker = self.select_build_worker(target_bunker_pos)
+                            if worker:
+                                self.do(worker.build(UnitTypeId.BUNKER, target_bunker_pos), subtract_cost=True, ignore_warning=True)
 
             # 2nd Bunker: 앞마당 길목(2차 최전선)
             elif (
@@ -1328,54 +1416,107 @@ class CoachedTerranBot(BotAI):
 
         # Determine Active Frontline Staging & Forward Rally Point
         # Forward posture: When natural CC exists, stage forward towards the map center/choke
-        bunkers = self.structures(UnitTypeId.BUNKER).ready
         if other_ccs:
             nat_cc = other_ccs.first
-            # Push forward: rally 7 tiles ahead of natural CC towards the map center!
-            rally_point = nat_cc.position.towards(self.game_info.map_center, 7.0)
-        elif bunkers:
-            rally_point = bunkers.first.position.towards(self.game_info.map_center, 3.0)
+            rally_point = nat_cc.position.towards(self.game_info.map_center, 6.0)
         else:
-            rally_point = ramp_choke.towards(self.game_info.map_center, 2.0)
+            # 1-base: rally safely on main base high ground 3.5 tiles behind ramp choke to avoid choke congestion
+            rally_point = ramp_choke.towards(main_base.position, 3.5)
 
         # Smart Production Rally: Direct newly produced units immediately towards the open frontline
         for pb in self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).ready:
             pb(AbilityId.RALLY_BUILDING, rally_point)
 
-        # Anti-Stuck & Trapped Combat Unit Watchdog:
-        # Detect combat ground units trapped between structures for > 4.5 seconds and unstick them
-        # CRITICAL: Exclude SCVs and MULEs completely! Harvesters have dedicated mining distribution.
+        # --- Advanced Anti-Stuck & Pathing Clearance Watchdog ---
+        # Detect and rescue any combat units or workers trapped behind buildings or ramp
         now_time = self.time
-        combat_stuck_candidates = self.units.filter(
+
+        # 1. Collect intentionally stationary unit tags (loaded in bunkers, sieged tanks, burrowed mines)
+        bunker_passenger_tags = set()
+        for b in self.structures(UnitTypeId.BUNKER):
+            bunker_passenger_tags.update(b.passengers_tags)
+
+        stationary_combat_types = {
+            UnitTypeId.SIEGEMATANKSIEGED,
+            UnitTypeId.WIDOWMINEBURROWED,
+            UnitTypeId.LIBERATORAG,
+            UnitTypeId.MULE,
+        }
+
+        # Track mobile ground combat units inside the base territory
+        ground_combat_units = self.units.filter(
             lambda x: (x.can_attack_ground or x.can_attack_air)
-            and x.type_id not in {UnitTypeId.SCV, UnitTypeId.MULE}
+            and x.type_id not in stationary_combat_types
+            and x.tag not in bunker_passenger_tags
+            and x.type_id != UnitTypeId.SCV
             and not x.is_flying
-            and x.is_moving
+            and x.distance_to(main_base.position) < 32.0
+            and not self.enemy_units.closer_than(7.0, x.position)
         )
-        for u in combat_stuck_candidates:
+
+        for u in ground_combat_units:
             last_pos, stuck_time = self.unit_stuck_watch.get(u.tag, (u.position, now_time))
-            if u.distance_to(last_pos) < 0.3:
-                if now_time - stuck_time >= 4.5:
-                    # Unit is stuck in building maze!
-                    # 1. Give move order towards wide open rally point
+            if u.distance_to(last_pos) < 0.35:
+                duration_stuck = now_time - stuck_time
+                if duration_stuck >= 3.5:
+                    # Unit is trapped or unable to path!
+                    # Unstick Action 1: Force lower all supply depots within 6 tiles of this unit
+                    nearby_depots = self.structures(UnitTypeId.SUPPLYDEPOT).ready.closer_than(6.0, u.position)
+                    for d in nearby_depots:
+                        d(AbilityId.MORPH_SUPPLYDEPOT_LOWER)
+
+                    # Unstick Action 2: Direct movement towards wide open rally point
                     u.move(rally_point)
-                    # 2. If an adjacent production building is idle and has no active add-on research, lift off briefly!
-                    trapping_blds = self.structures({UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT}).closer_than(3.2, u.position).idle
-                    for tb in trapping_blds:
-                        if not tb.is_flying and not tb.has_add_on:
-                            tb(AbilityId.LIFT)
-                            break
-                    self.unit_stuck_watch[u.tag] = (u.position, now_time)
+
+                    # Unstick Action 3: If trapped for > 5.0 seconds, lift adjacent idle production building to clear path
+                    if duration_stuck >= 5.0:
+                        trapping_blds = self.structures({
+                            UnitTypeId.BARRACKS, UnitTypeId.FACTORY, UnitTypeId.STARPORT
+                        }).closer_than(3.8, u.position).idle
+                        for tb in trapping_blds:
+                            if not tb.is_flying:
+                                tb(AbilityId.LIFT)
+                                break
+                    self.unit_stuck_watch[u.tag] = (last_pos, stuck_time)
                 else:
                     self.unit_stuck_watch[u.tag] = (last_pos, stuck_time)
             else:
                 self.unit_stuck_watch[u.tag] = (u.position, now_time)
 
+        # 2. Construction & Mining SCV Stuck Watchdog:
+        # Detect SCVs pinned by structures after building depot/refinery/bunker
+        scv_candidates = self.workers.filter(
+            lambda s: not s.is_carrying_minerals
+            and not s.is_carrying_vespene
+            and not s.is_constructing_scv
+            and s.distance_to(main_base.position) < 25.0
+        )
+        for scv in scv_candidates:
+            last_pos, stuck_time = self.unit_stuck_watch.get(scv.tag, (scv.position, now_time))
+            if scv.distance_to(last_pos) < 0.2:
+                if now_time - stuck_time >= 4.0:
+                    # SCV is pinned! Use StarCraft II "Mineral Walk" collision phase trick to unstick
+                    local_minerals = self.mineral_field.closer_than(12.0, main_base.position)
+                    if local_minerals:
+                        scv.gather(local_minerals.first)
+                    self.unit_stuck_watch[scv.tag] = (last_pos, stuck_time)
+                else:
+                    self.unit_stuck_watch[scv.tag] = (last_pos, stuck_time)
+            else:
+                self.unit_stuck_watch[scv.tag] = (scv.position, now_time)
 
-        # Land any lifted buildings once units have cleared
+        # 3. Clean up stale tags from dead units
+        all_unit_tags = {u.tag for u in self.units}
+        self.unit_stuck_watch = {k: v for k, v in self.unit_stuck_watch.items() if k in all_unit_tags}
+
+        # 4. Safely Land lifted buildings (check that landing spot does NOT block ramp choke)
         for fb in self.structures({UnitTypeId.BARRACKSFLYING, UnitTypeId.FACTORYFLYING, UnitTypeId.STARPORTFLYING}).idle:
-            if fb.distance_to(main_base.position) < 20:
-                land_pos = await self.find_placement(UnitTypeId.BARRACKS, near=fb.position)
+            if fb.distance_to(main_base.position) < 25:
+                b_type = (
+                    UnitTypeId.BARRACKS if fb.type_id == UnitTypeId.BARRACKSFLYING
+                    else (UnitTypeId.FACTORY if fb.type_id == UnitTypeId.FACTORYFLYING else UnitTypeId.STARPORT)
+                )
+                land_pos = await self.find_safe_main_placement(b_type)
                 if land_pos:
                     fb(AbilityId.LAND, land_pos)
 

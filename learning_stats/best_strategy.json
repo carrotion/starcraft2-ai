@@ -35,7 +35,7 @@
   "early_scout": true,
   "periodic_scan": true,
   "scan_interval_sec": 90.0,
-  "composition_focus": "mech_heavy",
+  "composition_focus": "adaptive",
   "train_marines": true,
   "train_reapers": true,
   "train_marauders": true,
@@ -52,6 +52,6 @@
   "train_ravens": true,
   "train_banshees": true,
   "train_battlecruisers": true,
-  "attack_army_threshold": 36,
+  "attack_army_threshold": 32,
   "defend_base_on_attack": true
 }
